@@ -628,7 +628,6 @@ def query_faiss(query_text, top_k=15, max_distance=4.0):
     return results
 
 if __name__ == "__main__":
-    # query = "Skills of Arun"
     query = "What are Skills of Arun"
     results = query_faiss(query)
     for result in results:
