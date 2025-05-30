@@ -11,6 +11,7 @@ const jobProfileRoutes = require('./routes/jobProfileRoutes');
 const profileRoutes = require('./routes/profiles');
 const jobsRoutes = require('./routes/upworkJobsRoutes');
 const queryRoutes = require("./routes/queryRoutes");
+const authRoutes = require('./routes/authRoutes');
 
 app.use(cors());
 app.use(express.json());
@@ -23,6 +24,7 @@ app.use('/api/job-profiles', jobProfileRoutes);
 app.use('/api/profiles', profileRoutes);
 app.use('/api/jobs', jobsRoutes);
 app.use('/api',queryRoutes);
+app.use('/api/auth', authRoutes);
 
 
 const initialize = async () => {

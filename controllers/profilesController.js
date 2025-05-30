@@ -7,11 +7,9 @@ const exec = util.promisify(require("child_process").exec);
 
 exports.createProfile = async (req, res) => {
   try {
+    console.log("Creating profile with data:", req.body);
     const { name } = req.body;
     const result = await pool.query("INSERT INTO profiles (name) VALUES ($1) RETURNING *", [name]);
-    const profileId = result.rows[0].id;
-
-    await pool.query("INSERT INTO job_profile (profile_id) VALUES ($1)", [profileId]);
 
     res.json(result.rows[0]);
   } catch (err) {
