@@ -23,7 +23,8 @@ const upload = multer({
 
 router.post("/", profileController.createProfile);
 router.get("/", profileController.getProfiles);
-router.put("/:id/train", upload.single("file"), profileController.trainProfile);
+// router.put("/:id/train", upload.single("file"), profileController.trainProfile);
+router.post('/train/:profileId', upload.single("file"), profileController.trainProfile);
 router.delete("/:id", profileController.deleteProfile);
 
 module.exports = router;

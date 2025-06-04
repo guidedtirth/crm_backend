@@ -1,0 +1,6 @@
+# Add your project dependencies below.
+# Example:
+# flask==2.3.2
+# requests==2.31.0
+
+# If you want to automatically detect used packages, use pipreqs or pip freeze.
