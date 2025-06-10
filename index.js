@@ -3,7 +3,7 @@ const cors = require('cors');
 const fetchJobs = require('./upworkFetcher');
 const refreshToken = require('./tokenManager');
 const app = express();
-const port = 3000;
+const port = 3009;
 
 
 // const jobRoutes = require('./routes/jobRoutes');
