@@ -10,7 +10,7 @@ const getAllJobProfiles = async (req, res) => {
             FROM 
                 job_profile jp
             JOIN 
-                jobs j ON jp.job_id = j.id
+                upwork_jobs j ON jp.job_id = j.id
         `);
         res.status(200).json(result.rows);
     } catch (error) {
@@ -24,9 +24,13 @@ const getJobProfileById = async (req, res) => {
     try {
         const result = await db.query(`
             SELECT 
-                *
+                jp.*,
+                uj.title as job_title,
+                uj.job_data
             FROM 
                 job_profile jp
+            LEFT JOIN 
+                upwork_jobs uj ON jp.job_id = uj.id
             WHERE 
                 jp.profile_id = $1
         `, [profile_id]);
