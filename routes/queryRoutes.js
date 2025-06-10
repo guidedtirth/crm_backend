@@ -1,7 +1,11 @@
-const express = require("express");
+const express = require('express');
 const router = express.Router();
-const queryController = require("../controllers/queryController");
+const multer = require('multer');
+const queryController = require('../controllers/queryController');
 
-router.post("/query", queryController.queryOpenAI);
+const upload = multer({ dest: 'Uploads/' });
+
+router.post('/query', queryController.processQuery);
+router.post('/train/:profileId', upload.single('pdf'), queryController.trainProfile);
 
 module.exports = router;

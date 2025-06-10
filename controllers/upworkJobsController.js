@@ -4,7 +4,7 @@ module.exports = {
   // Get all jobs
   getAllJobs: async (req, res) => {
     try {
-      const { rows } = await db.query('SELECT * FROM upwork_jobs ORDER BY inserted_at DESC');
+      const { rows } = await db.query(`select * from proposal_feedback where thread_id='thread_EDbkLGtg5pzt5X2s6CLCjs0i'`);
       res.json(rows);
     } catch (err) {
       res.status(500).json({ error: err.message });

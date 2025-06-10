@@ -1,9 +1,17 @@
 const express = require('express');
 const cors = require('cors');
 const fetchJobs = require('./upworkFetcher');
+const { initializeAssistant } = require('./assistant');
 const refreshToken = require('./tokenManager');
 const app = express();
 const port = 3000;
+
+
+// Initialize Assistant
+initializeAssistant().catch(err => {
+  console.error('Failed to initialize assistant:', err);
+  process.exit(1);
+});
 
 
 
@@ -13,6 +21,7 @@ const profileRoutes = require('./routes/profiles');
 const jobsRoutes = require('./routes/upworkJobsRoutes');
 const queryRoutes = require("./routes/queryRoutes");
 const authRoutes = require('./routes/authRoutes');
+const proposalRoutes = require('./routes/proposalRoutes');
 
 app.use(cors());
 app.use(express.json());
@@ -25,6 +34,7 @@ app.use('/api/job-profiles', jobProfileRoutes);
 app.use('/api/profiles', profileRoutes);
 app.use('/api/jobs', jobsRoutes);
 app.use('/api',queryRoutes);
+app.use('/api/proposal', proposalRoutes);
 app.use('/api/auth', authRoutes);
 
 
@@ -47,4 +57,10 @@ initialize();
 
 app.listen(port, () => {
   console.log(`Server running at http://localhost:${port}`);
+});
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('Shutting down server');
+  process.exit(0);
 });
