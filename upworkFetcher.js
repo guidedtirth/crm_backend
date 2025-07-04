@@ -276,12 +276,13 @@ async function processNewJobs() {
         console.log(`Processing job ID: ${row.id}, Title: ${job.title || 'Unknown'}`);
         const result = await generateProposal(job);
 
-        await db.query(
+        let res=await db.query(
           `UPDATE upwork_jobs 
            SET proposal_generated = TRUE
-           WHERE id = $1`,
+           WHERE id = $1 returning proposal_generated`,
           [row.id]
         );
+        console.log("resulr",res)
 
         console.log(`✅ Generated proposal for job ${row.id}`);
         processedCount++;
