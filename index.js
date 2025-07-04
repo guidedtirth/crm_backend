@@ -41,7 +41,7 @@ app.use('/api/auth', authRoutes);
 const initialize = async () => {
   const accessToken = await refreshToken(); // Refresh at start
   if (accessToken) {
-    fetchJobs(); // Only call if token is fresh
+   await fetchJobs(); // Only call if token is fresh
   }
 
   // Schedule refresh every 23 hours (before 24 hour expiry)
