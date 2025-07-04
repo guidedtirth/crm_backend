@@ -5,7 +5,7 @@ const fetchJobs = require('./upworkFetcher');
 const { initializeAssistant } = require('./assistant');
 const refreshToken = require('./tokenManager');
 const app = express();
-const port = 3000;
+const port = 3009;
 
 
 // Initialize Assistant
@@ -46,7 +46,7 @@ app.use('/apis', pptxRoutes);
 const initialize = async () => {
   const accessToken = await refreshToken(); // Refresh at start
   if (accessToken) {
-    fetchJobs(); // Only call if token is fresh
+   await fetchJobs(); // Only call if token is fresh
   }
 
   // Schedule refresh every 23 hours (before 24 hour expiry)
