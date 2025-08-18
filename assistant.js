@@ -6,7 +6,9 @@ require('dotenv').config();
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const configPath = path.join(__dirname, 'assistant_config.json');
-const PYTHON_EXECUTABLE = path.join(__dirname, '.venv', 'bin', 'python3');
+const PYTHON_EXECUTABLE = process.platform === 'win32'
+  ? path.join(__dirname, '.venv', 'Scripts', 'python.exe') // Windows
+  : path.join(__dirname, '.venv', 'bin', 'python3');
 
 let assistantId = null;
 

@@ -1,11 +1,16 @@
 const express = require('express');
 const cors = require('cors');
+const fs = require('fs').promises;
 const bodyParser = require('body-parser');
 const fetchJobs = require('./upworkFetcher');
 const { initializeAssistant } = require('./assistant');
 const refreshToken = require('./tokenManager');
 const app = express();
 const port = 3009;
+const path = require('path');
+const PYTHON_EXECUTABLE = process.platform === 'win32'
+  ? path.join(__dirname, '.venv', 'Scripts', 'python.exe') // Windows
+  : path.join(__dirname, '.venv', 'bin', 'python3');       // Linux/Mac
 
 
 // Initialize Assistant
@@ -69,3 +74,13 @@ process.on('SIGTERM', () => {
   console.log('Shutting down server');
   process.exit(0);
 });
+
+// Update the Python executable path check
+fs.access(PYTHON_EXECUTABLE)
+  .then(() => {
+    console.log(`Python executable found at: ${PYTHON_EXECUTABLE}`);
+  })
+  .catch(() => {
+    console.error(`Error: Python executable not found at ${PYTHON_EXECUTABLE}`);
+    process.exit(1);
+  });
