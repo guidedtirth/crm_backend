@@ -1,5 +1,6 @@
 const axios = require('axios');
 const cheerio = require('cheerio');
+const path = require('path');
 
 // Configuration Constants
 const TEST_MODE = false; // Set to false to fetch all projects
@@ -28,9 +29,15 @@ async function fetchPageData(pageUrl) {
         const $ = cheerio.load(response.data);
 
         // --- Promoter Name & ID ---
+        const projectNameText = $('#ctl00_ContentPlaceHolder1_lblProjectNameHeading').text().trim();
+        const projectIdText = $('#ctl00_ContentPlaceHolder1_lblProjectNameWithID').text().trim();
+        const ragistrationdateText = $('#ctl00_ContentPlaceHolder1_lblregisdate').text().trim();
         const promoterNameText = $('#ctl00_ContentPlaceHolder1_lblPromoterNameHeading').text().trim();
         const promoterIdText = $('#ctl00_ContentPlaceHolder1_lblPromoterNameWithID').text().trim();
 
+        const projectName = projectNameText.replace(/^Project Name:\s*/, '');
+        const projectId = projectIdText.replace(/^Project Id:\s*|\(|\)/g, '');
+        const ragistrationdate = ragistrationdateText.replace(/^Registration Date:\s*/, '');
         const promoterName = promoterNameText.replace(/^Promoter Name:\s*/, '');
         const promoterId = promoterIdText.replace(/^Promoter Id:\s*|\(|\)/g, '');
 
@@ -190,10 +197,10 @@ async function fetchPageData(pageUrl) {
                 let doc = {
                     sno: $(cols[0]).text().trim(),
                     documentName: $(cols[1]).text().trim(),
-                    uploadedFileName: `https://up-rera.in/ViewDocument?Param=${$(cols[2]).text().trim()}`,
+                    uploadedFileName: $(cols[2]).text().trim(),
                     uploadedDate: $(cols[3]).text().trim(),
                     uploadDocType: $(cols[4]).text().trim(),
-                    downloadLink: $(cols[5]).find("a").attr("href") || null
+                    downloadLink: `https://up-rera.in/ViewDocument?Param=${$(cols[2]).text().trim()}`
                 };
                 documents.push(doc);
             }
@@ -201,6 +208,9 @@ async function fetchPageData(pageUrl) {
 
         // ---- Final object ----
         const result = {
+            projectName,
+            projectId,
+            ragistrationdate,
             promoterName,
             promoterId,
             basicDetails,
@@ -228,7 +238,7 @@ async function scrapeProjectList(maxPages = MAX_PAGES_TO_SCRAPE) {
     while (currentPage <= maxPages && hasNextPage) {
         try {
             console.log(`Fetching page ${currentPage}...`);
-            
+
             const response = await axios.get(baseUrl, {
                 params: { page: currentPage },
                 headers: {
@@ -237,14 +247,14 @@ async function scrapeProjectList(maxPages = MAX_PAGES_TO_SCRAPE) {
                 },
                 timeout: 30000
             });
-            
+
             console.log(`Response status: ${response.status}`);
-            
+
             const $ = cheerio.load(response.data);
-            
+
             // Select the projects table
             const projectTable = $('#grdPojDetail');
-            
+
             if (projectTable.length === 0) {
                 console.log('No project table found on page.');
                 break;
@@ -254,18 +264,18 @@ async function scrapeProjectList(maxPages = MAX_PAGES_TO_SCRAPE) {
             projectTable.find('tr').each((i, row) => {
                 // Skip header row
                 if (i === 0) return;
-                
+
                 if (testMode && rowCount >= TEST_ROWS) return false;
-                
+
                 const cols = $(row).find('td');
                 if (cols.length >= 4) { // We need at least 4 columns to get RERA number
                     const reraNoElement = $(cols[3]).find('span[id*="lblRegistrationNo"]');
                     const reraNo = reraNoElement.text().trim();
-                    
+
                     // Extract ID from RERA number (UPRERAPRJ13276 → 13276)
                     const idMatch = reraNo.match(/UPRERAPRJ(\d+)/i);
                     const id = idMatch ? idMatch[1] : null;
-                    
+
                     if (id && !isNaN(id)) {
                         projectIds.push(id);
                         rowCount++;
@@ -284,9 +294,9 @@ async function scrapeProjectList(maxPages = MAX_PAGES_TO_SCRAPE) {
             // Check for next page
             hasNextPage = $("a:contains('Next'), a[aria-label='Next']").not('.disabled').length > 0;
             currentPage++;
-            
+
             await new Promise(resolve => setTimeout(resolve, getRandomDelay()));
-            
+
         } catch (error) {
             console.error(`Error scraping page ${currentPage}:`, error.message);
             hasNextPage = false;
@@ -296,59 +306,84 @@ async function scrapeProjectList(maxPages = MAX_PAGES_TO_SCRAPE) {
     return [...new Set(projectIds)];
 }
 
-// [Keep your existing fetchPageData function exactly as is]
+// Utility function to split into chunks
+function chunkArray(array, size) {
+    const result = [];
+    for (let i = 0; i < array.length; i += size) {
+        result.push(array.slice(i, i + size));
+    }
+    return result;
+}
 
-// Main runner with progress tracking
+// Main runner with batch processing
 (async () => {
     try {
         console.log("Starting scraping process...");
         const ids = await scrapeProjectList();
-        
+
         if (ids.length === 0) {
             console.log("No project IDs found.");
             return;
         }
 
-        console.log(`Found ${ids.length} project IDs. Starting data collection...`);
+        console.log(`Found ${ids.length} project IDs. Starting data collection in batches of 10...`);
 
-        const results = [];
-        const failedIds = [];
-
-        for (let i = 0; i < ids.length; i++) {
-            const id = ids[i];
-            try {
-                // Use the correct URL format with the ID
-                const url = `https://up-rera.in/Frm_View_Project_Details.aspx?id=${id}`;
-                console.log(`[${i+1}/${ids.length}] Fetching data for project ID: ${id}`);
-                
-                const data = await fetchPageData(url);
-                
-                if (data) {
-                    results.push({ id, data });
-                    console.log(`✅ Successfully fetched data for project ${id}`);
-                } else {
-                    failedIds.push(id);
-                    console.log(`❌ Empty data for project ${id}`);
-                }
-                
-                await new Promise(resolve => setTimeout(resolve, getRandomDelay()));
-            } catch (error) {
-                failedIds.push(id);
-                console.error(`Error processing project ${id}:`, error.message);
-            }
+        const fs = require('fs');
+        const outputDir = path.join(__dirname, 'rera-up');
+        if (!fs.existsSync(outputDir)) {
+            fs.mkdirSync(outputDir, { recursive: true });
         }
 
-        console.log("\nScraping completed. Results:");
+
+        let results = [];
+        let failedIds = [];
+
+        // Split into batches of 10
+        const batches = chunkArray(ids, 10);
+
+        for (let b = 0; b < batches.length; b++) {
+            const batch = batches[b];
+            console.log(`\n🚀 Processing batch ${b + 1}/${batches.length} (size: ${batch.length})`);
+            let filename = path.join(outputDir, `up-rera-results-${b + 1}.json`);
+
+            // 🔑 Reset batch results for this file
+            let batchResults = [];
+
+            for (let i = 0; i < batch.length; i++) {
+                const id = batch[i];
+                try {
+                    const url = `https://up-rera.in/Frm_View_Project_Details.aspx?id=${id}`;
+                    console.log(`[Batch ${b + 1}] [${i + 1}/${batch.length}] Fetching data for project ID: ${id}`);
+
+                    const data = await fetchPageData(url);
+
+                    if (data) {
+                        batchResults.push({ id, data });  // ✅ store only in this batch
+                        results.push({ id, data });       // ✅ still keep global results
+                        console.log(`✅ Successfully fetched data for project ${id}`);
+                    } else {
+                        failedIds.push(id);
+                        console.log(`❌ Empty data for project ${id}`);
+                    }
+
+                    await new Promise(resolve => setTimeout(resolve, getRandomDelay()));
+                } catch (error) {
+                    failedIds.push(id);
+                    console.error(`Error processing project ${id}:`, error.message);
+                }
+            }
+
+            // ✅ Save only this batch’s 10 results
+            fs.writeFileSync(filename, JSON.stringify(batchResults, null, 2));
+            console.log(`💾 Batch ${b + 1} results saved to ${filename}`);
+        }
+
+
+        console.log("\n🎉 Scraping completed.");
         console.log(`✅ Successful fetches: ${results.length}`);
         console.log(`❌ Failed fetches: ${failedIds.length}`);
-        
-        // Save results to a file
-        if (results.length > 0) {
-            const fs = require('fs');
-            const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-            const filename = `up-rera-results-${timestamp}.json`;
-            fs.writeFileSync(filename, JSON.stringify(results, null, 2));
-            console.log(`Results saved to ${filename}`);
+        if (failedIds.length > 0) {
+            console.log("Failed IDs:", failedIds);
         }
 
     } catch (mainError) {
