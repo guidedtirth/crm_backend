@@ -2,15 +2,12 @@ const express = require('express');
 const cors = require('cors');
 const fs = require('fs').promises;
 const bodyParser = require('body-parser');
-const fetchJobs = require('./upworkFetcher');
 const { initializeAssistant } = require('./assistant');
 const refreshToken = require('./tokenManager');
 const app = express();
 const port = 3009;
 const path = require('path');
-const PYTHON_EXECUTABLE = process.platform === 'win32'
-  ? path.join(__dirname, '.venv', 'Scripts', 'python.exe') // Windows
-  : path.join(__dirname, '.venv', 'bin', 'python3');       // Linux/Mac
+// Python no longer required; ensure Node-only flow
 
 
 // Initialize Assistant
@@ -28,7 +25,6 @@ const jobsRoutes = require('./routes/upworkJobsRoutes');
 const queryRoutes = require("./routes/queryRoutes");
 const authRoutes = require('./routes/authRoutes');
 const proposalRoutes = require('./routes/proposalRoutes');
-const pptxRoutes = require('./routes/pptxRoutes');
 app.use(bodyParser.json({ limit: '5mb' }));
 
 app.use(cors());
@@ -45,14 +41,13 @@ app.use('/api',queryRoutes);
 app.use('/api/proposal', proposalRoutes);
 app.use('/api/auth', authRoutes);
 
-app.use('/apis', pptxRoutes);
+// Start the Upwork pipeline module (self-initializes scheduling)
+require('./upworkFetcher');
 
 
 const initialize = async () => {
   const accessToken = await refreshToken(); // Refresh at start
-  if (accessToken) {
-   await fetchJobs(); // Only call if token is fresh
-  }
+  // upworkFetcher self-starts its scheduler; no direct call needed
 
   // Schedule refresh every 23 hours (before 24 hour expiry)
   setInterval(async () => {
@@ -75,12 +70,4 @@ process.on('SIGTERM', () => {
   process.exit(0);
 });
 
-// Update the Python executable path check
-fs.access(PYTHON_EXECUTABLE)
-  .then(() => {
-    console.log(`Python executable found at: ${PYTHON_EXECUTABLE}`);
-  })
-  .catch(() => {
-    console.error(`Error: Python executable not found at ${PYTHON_EXECUTABLE}`);
-    process.exit(1);
-  });
+// Removed Python executable checks; Node-only implementation

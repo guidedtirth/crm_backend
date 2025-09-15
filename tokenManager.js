@@ -28,11 +28,18 @@ const refreshToken = async () => {
     const envPath = path.resolve(__dirname, '.env');
     let envContent = fs.readFileSync(envPath, 'utf8');
 
-    envContent = envContent
-      .replace(/ACCESS_TOKEN=.*/g, `ACCESS_TOKEN=${newAccessToken}`)
-      .replace(/REFRESH_TOKEN=.*/g, `REFRESH_TOKEN=${newRefreshToken}`);
+    envContent = envContent.replace(/ACCESS_TOKEN=.*/g, `ACCESS_TOKEN=${newAccessToken}`);
+    if (newRefreshToken) {
+      envContent = envContent.replace(/REFRESH_TOKEN=.*/g, `REFRESH_TOKEN=${newRefreshToken}`);
+    }
 
     fs.writeFileSync(envPath, envContent);
+
+    // Update in-memory env so subsequent refreshes use the newest tokens without restart
+    process.env.ACCESS_TOKEN = newAccessToken;
+    if (newRefreshToken) {
+      process.env.REFRESH_TOKEN = newRefreshToken;
+    }
     console.log('🔄 .env updated with new tokens');
 
     return newAccessToken;

@@ -6,9 +6,6 @@ require('dotenv').config();
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const configPath = path.join(__dirname, 'assistant_config.json');
-const PYTHON_EXECUTABLE = process.platform === 'win32'
-  ? path.join(__dirname, '.venv', 'Scripts', 'python.exe') // Windows
-  : path.join(__dirname, '.venv', 'bin', 'python3');
 
 let assistantId = null;
 
@@ -25,8 +22,8 @@ async function initializeAssistant() {
     if (!config.assistantId) {
       const assistant = await openai.beta.assistants.create({
         name: `ProfileMatchingAssistant_${uuidv4()}`,
-        instructions: "You are an expert in generating professional job proposals...", // Your existing instructions
-        model: "gpt-4-turbo",
+        instructions: "You are an expert in generating professional job proposals...",
+        model: "gpt-4o-mini",
         tools: []
       });
       config.assistantId = assistant.id;
@@ -48,14 +45,7 @@ function getAssistantId() {
   return assistantId;
 }
 
-// Verify Python executable exists
-fs.access(PYTHON_EXECUTABLE).catch(() => {
-  console.error(`Python executable not found at ${PYTHON_EXECUTABLE}`);
-  process.exit(1);
-});
-
 module.exports = {
   initializeAssistant,
-  getAssistantId,
-  PYTHON_EXECUTABLE
+  getAssistantId
 };

@@ -5,6 +5,9 @@
   "scripts": {
     "start": "node index.js",
     "dev": "nodemon index.js",
+    "upwork:serve": "node upworkAuth.js --serve",
+    "upwork:refresh": "node upworkAuth.js --refresh",
+    "upwork:url": "node upworkAuth.js --print-url",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
@@ -15,20 +18,17 @@
     "axios": "^1.11.0",
     "bcrypt": "^6.0.0",
     "body-parser": "^2.2.0",
-    "cheerio": "^1.1.2",
     "cors": "^2.8.5",
-    "dayjs": "^1.11.13",
     "dotenv": "^16.5.0",
     "express": "^5.1.0",
+    "mammoth": "^1.7.2",
     "jsonwebtoken": "^9.0.2",
     "multer": "^2.0.0",
     "node-cron": "^4.0.7",
     "nodemon": "^3.1.10",
-    "openai": "^5.8.2",
+    "openai": "^5.10.1",
     "pdf-parse": "^1.1.1",
     "pg": "^8.16.0",
-    "playwright": "^1.54.2",
-    "pptxgenjs": "^4.0.1",
     "uuid": "^11.1.0"
   }
 }
