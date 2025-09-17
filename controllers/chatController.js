@@ -147,8 +147,9 @@ module.exports = {
 
       const userMsgId = uuidv4();
       const asstMsgId = uuidv4();
-      await db.query('INSERT INTO profile_chat_messages (id, profile_id, thread_id, role, content) VALUES ($1, $2, $3, $4, $5)', [userMsgId, profileId, threadId, 'user', content]);
-      await db.query('INSERT INTO profile_chat_messages (id, profile_id, thread_id, role, content) VALUES ($1, $2, $3, $4, $5)', [asstMsgId, profileId, threadId, 'assistant', assistantText]);
+      // Do not persist plaintext: store NULL; client saves encrypted copy via /encrypted
+      await db.query('INSERT INTO profile_chat_messages (id, profile_id, thread_id, role, content) VALUES ($1, $2, $3, $4, NULL)', [userMsgId, profileId, threadId, 'user']);
+      await db.query('INSERT INTO profile_chat_messages (id, profile_id, thread_id, role, content) VALUES ($1, $2, $3, $4, NULL)', [asstMsgId, profileId, threadId, 'assistant']);
       await db.query('UPDATE profile_chat_threads SET updated_at = NOW() WHERE thread_id = $1', [threadId]);
 
       return res.json({ thread_id: threadId, messages: [
@@ -185,8 +186,8 @@ module.exports.editMessage = async (req, res) => {
 
     // Delete all following messages in this thread
     await db.query('DELETE FROM profile_chat_messages WHERE profile_id = $1 AND thread_id = $2 AND created_at > $3', [profileId, target.thread_id, target.created_at]);
-    // Update the edited message content
-    await db.query('UPDATE profile_chat_messages SET content = $1 WHERE id = $2', [content, messageId]);
+    // Do not keep plaintext for the edited message
+    await db.query('UPDATE profile_chat_messages SET content = NULL WHERE id = $1', [messageId]);
 
     // Fetch remaining messages up to and including edited one (chronological)
     const hist = await db.query('SELECT id, role, content, created_at FROM profile_chat_messages WHERE profile_id = $1 AND thread_id = $2 ORDER BY created_at ASC', [profileId, target.thread_id]);
@@ -201,8 +202,8 @@ module.exports.editMessage = async (req, res) => {
 
     // Safety: ensure the edited user message exists under the new thread id
     await db.query(
-      'INSERT INTO profile_chat_messages (id, profile_id, thread_id, role, content) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (id) DO NOTHING',
-      [messageId, profileId, thread.id, 'user', content]
+      'INSERT INTO profile_chat_messages (id, profile_id, thread_id, role, content) VALUES ($1, $2, $3, $4, NULL) ON CONFLICT (id) DO NOTHING',
+      [messageId, profileId, thread.id, 'user']
     );
 
     // Replay only user messages into the new OpenAI thread so the assistant has context
@@ -220,7 +221,7 @@ module.exports.editMessage = async (req, res) => {
 
     // Persist the assistant reply under the new thread id
     const asstMsgId = uuidv4();
-    await db.query('INSERT INTO profile_chat_messages (id, profile_id, thread_id, role, content) VALUES ($1, $2, $3, $4, $5)', [asstMsgId, profileId, thread.id, 'assistant', assistantText]);
+    await db.query('INSERT INTO profile_chat_messages (id, profile_id, thread_id, role, content) VALUES ($1, $2, $3, $4, NULL)', [asstMsgId, profileId, thread.id, 'assistant']);
 
     // Return updated thread id and full message history (now migrated)
     const newHist = await db.query('SELECT id, role, content, created_at FROM profile_chat_messages WHERE profile_id = $1 AND thread_id = $2 ORDER BY created_at ASC', [profileId, thread.id]);
