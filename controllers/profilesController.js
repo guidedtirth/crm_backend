@@ -63,13 +63,11 @@ exports.deleteProfile = async (req, res) => {
 
     // 3. Delete profile from DB
     await pool.query("DELETE FROM profiles WHERE id = $1::uuid", [id]);
-    const result = await pool.query("DELETE FROM job_profile WHERE profile_id = $1 RETURNING *", [id]);
 
     res.json({ 
       message: "Profile and files deleted successfully",
       deletedProfileId: id,
-      deletedFiles: trainingFiles.map(f => f.name),
-      deletedJobProfiles: result.rows 
+      deletedFiles: trainingFiles.map(f => f.name)
     });
   } catch (err) {
     console.error("Delete error:", err.message);

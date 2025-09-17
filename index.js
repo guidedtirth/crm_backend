@@ -25,6 +25,8 @@ const jobsRoutes = require('./routes/upworkJobsRoutes');
 const queryRoutes = require("./routes/queryRoutes");
 const authRoutes = require('./routes/authRoutes');
 const proposalRoutes = require('./routes/proposalRoutes');
+const filtersRoutes = require('./routes/filtersRoutes');
+const chatRoutes = require('./routes/chatRoutes');
 app.use(bodyParser.json({ limit: '5mb' }));
 
 app.use(cors());
@@ -39,7 +41,9 @@ app.use('/api/profiles', profileRoutes);
 app.use('/api/jobs', jobsRoutes);
 app.use('/api',queryRoutes);
 app.use('/api/proposal', proposalRoutes);
+app.use('/api/filters', filtersRoutes);
 app.use('/api/auth', authRoutes);
+app.use('/api/chat', chatRoutes);
 
 // Start the Upwork pipeline module (self-initializes scheduling)
 require('./upworkFetcher');

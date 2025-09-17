@@ -19,10 +19,18 @@ async function initializeAssistant() {
       console.log('No assistant config found, creating new Assistant');
     }
 
+    const generalInstructions = [
+      "You are a helpful, knowledgeable general AI assistant.",
+      "Provide accurate, concise answers by default; expand with step-by-step detail when helpful.",
+      "Ask clarifying questions when requirements are ambiguous; do not assume missing facts.",
+      "For code requests, return clear, minimal examples and mention important caveats.",
+      "Be professional and neutral; avoid unsafe or sensitive actions."
+    ].join(' ');
+
     if (!config.assistantId) {
       const assistant = await openai.beta.assistants.create({
-        name: `ProfileMatchingAssistant_${uuidv4()}`,
-        instructions: "You are an expert in generating professional job proposals...",
+        name: `GeneralAssistant_${uuidv4()}`,
+        instructions: generalInstructions,
         model: "gpt-4o-mini",
         tools: []
       });
@@ -30,7 +38,11 @@ async function initializeAssistant() {
       await fs.writeFile(configPath, JSON.stringify(config, null, 2));
       console.log(`Created Assistant with ID: ${assistant.id}`);
     } else {
-      await openai.beta.assistants.retrieve(config.assistantId);
+      // Update existing assistant to general-purpose
+      await openai.beta.assistants.update(config.assistantId, {
+        instructions: generalInstructions,
+        model: "gpt-4o-mini"
+      });
       console.log(`Using existing Assistant ID: ${config.assistantId}`);
     }
     assistantId = config.assistantId;

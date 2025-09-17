@@ -72,20 +72,167 @@ async function ensureAssistantReady() {
   }
 }
 
-// GraphQL query for marketplaceJobPostingsSearch
-// Updated GraphQL query - minimal valid structure from examples
-// Updated GraphQL query - minimal valid structure (no pagination args)
-const query = `
-  query marketplaceJobPostingsSearch(
-    $marketPlaceJobFilter: MarketplaceJobPostingsSearchFilter,
-    $searchType: MarketplaceJobPostingSearchType,
-    $sortAttributes: [MarketplaceJobPostingSearchSortAttribute]
-  ) {
-    marketplaceJobPostingsSearch(
-      marketPlaceJobFilter: $marketPlaceJobFilter,
-      searchType: $searchType,
-      sortAttributes: $sortAttributes
-    ) {
+// --------------------------- Enum literal helper ---------------------------
+// Wrap enum values so the serializer outputs them UNQUOTED.
+const enumVal = (name) => ({ __enum: String(name) });
+
+// ------------------------ GraphQL literal serializer -----------------------
+function toGraphQLInputLiteral(value) {
+  if (value === null) return "null";
+  if (value && typeof value === "object" && "__enum" in value) {
+    return value.__enum;
+  }
+  const t = typeof value;
+  if (t === "number" || t === "boolean") return String(value);
+  if (t === "string") return JSON.stringify(value);
+  if (Array.isArray(value)) return "[" + value.map(toGraphQLInputLiteral).join(", ") + "]";
+  if (t === "object") {
+    return (
+      "{ " +
+      Object.entries(value)
+        .map(([k, v]) => `${k}: ${toGraphQLInputLiteral(v)}`)
+        .join(", ") +
+      " }"
+    );
+  }
+  return "null";
+}
+
+// -------------------------- Introspection: IntRange ------------------------
+async function introspectIntRange(token, tenantId) {
+  const q = `
+    query {
+      __type(name: "IntRange") {
+        inputFields { name }
+      }
+    }
+  `;
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    "Content-Type": "application/json",
+  };
+  if (tenantId) headers["X-Upwork-API-TenantId"] = tenantId;
+  const resp = await axios.post(
+    "https://api.upwork.com/graphql",
+    { query: q },
+    { headers, timeout: 20000 }
+  );
+  const errs = resp.data?.errors;
+  if (errs?.length) throw new Error(JSON.stringify(errs));
+  const names = (resp.data?.data?.__type?.inputFields || []).map((f) => f.name);
+  const pairs = [
+    ["min", "max"],
+    ["from", "to"],
+    ["low", "high"],
+    ["start", "end"],
+  ];
+  for (const [a, b] of pairs) if (names.includes(a) && names.includes(b)) return { lowKey: a, highKey: b };
+  if (names.length >= 2) return { lowKey: names[0], highKey: names[1] };
+  throw new Error("Could not determine IntRange field names");
+}
+
+// ------------------------------ Load DB Filters ----------------------------
+async function loadUpworkFiltersFromDb() {
+  try {
+    const r = await db.query("SELECT * FROM job_filters WHERE platform = 'upwork' ORDER BY id ASC LIMIT 1");
+    if (r.rows.length === 0) {
+      return {
+        category_ids: [],
+        job_type: 'HOURLY',
+        workload: [],
+        verified_payment_only: true,
+        client_hires_min: 1,
+        client_hires_max: 100000,
+        hourly_rate_min: 15,
+        hourly_rate_max: 1000,
+        budget_min: 5000,
+        budget_max: 10000000,
+        proposal_min: 0,
+        proposal_max: 50,
+        experience_level: null,
+      };
+    }
+    const row = r.rows[0];
+    return {
+      category_ids: Array.isArray(row.category_ids) ? row.category_ids : [],
+      job_type: row.job_type || 'HOURLY',
+      workload: Array.isArray(row.workload)
+        ? row.workload.map((v) => String(v).toLowerCase())
+        : (row.workload ? [String(row.workload).toLowerCase()] : []),
+      verified_payment_only: Boolean(row.verified_payment_only),
+      client_hires_min: Number(row.client_hires_min ?? 1),
+      client_hires_max: Number(row.client_hires_max ?? 100000),
+      hourly_rate_min: Number(row.hourly_rate_min ?? 15),
+      hourly_rate_max: Number(row.hourly_rate_max ?? 1000),
+      budget_min: Number(row.budget_min ?? 5000),
+      budget_max: Number(row.budget_max ?? 10000000),
+      proposal_min: Number(row.proposal_min ?? 0),
+      proposal_max: Number(row.proposal_max ?? 50),
+      experience_level: row.experience_level || null,
+    };
+  } catch (e) {
+    console.warn('Failed to load upwork filters from DB, using defaults:', e.message);
+    return {
+      category_ids: [],
+      job_type: 'HOURLY',
+      workload: 'FULL_TIME',
+      verified_payment_only: true,
+      client_hires_min: 1,
+      client_hires_max: 100000,
+      hourly_rate_min: 15,
+      hourly_rate_max: 1000,
+      budget_min: 5000,
+      budget_max: 10000000,
+      proposal_min: 0,
+      proposal_max: 50,
+      experience_level: null,
+    };
+  }
+}
+
+async function fetchLatestJobs() {
+  const now = new Date();
+  console.log(`\n⏰ Starting job fetch at ${now.toISOString()}`);
+
+  try {
+    const envPath = path.resolve(__dirname, '.env');
+    const envConfig = dotenv.parse(await fs.readFile(envPath));
+    let accessToken = envConfig.ACCESS_TOKEN;
+    const refreshToken = envConfig.REFRESH_TOKEN;
+    const clientId = envConfig.CLIENT_ID;
+    const clientSecret = envConfig.CLIENT_SECRET;
+    const tenantId = envConfig.UPWORK_TENANT_ID || '';
+
+    if (!accessToken || !refreshToken || !clientId || !clientSecret) {
+      throw new Error('Missing ACCESS_TOKEN, REFRESH_TOKEN, CLIENT_ID, or CLIENT_SECRET in .env');
+    }
+
+    // Discover IntRange key names and build new-style filter (inline literal)
+    const { lowKey, highKey } = await introspectIntRange(accessToken, tenantId);
+
+    // Load filters from DB (single row configuration)
+    const uf = await loadUpworkFiltersFromDb();
+
+    // Build filter from DB values
+    const filter = {
+      ...(Array.isArray(uf.category_ids) && uf.category_ids.length ? { categoryIds_any: uf.category_ids.map(String) } : {}),
+      // Use DB workload directly: when exactly one selected, map to single enum; else omit
+      ...(Array.isArray(uf.workload) && uf.workload.length === 1 ? { workload_eq: enumVal(uf.workload[0] === 'full_time' ? 'FULL_TIME' : 'PART_TIME') } : {}),
+      verifiedPaymentOnly_eq: Boolean(uf.verified_payment_only),
+      clientHiresRange_eq: { [lowKey]: uf.client_hires_min, [highKey]: uf.client_hires_max },
+      // Include hourly range when present
+      ...((uf.hourly_rate_min != null || uf.hourly_rate_max != null) ? { hourlyRate_eq: { [lowKey]: uf.hourly_rate_min ?? 0, [highKey]: uf.hourly_rate_max ?? 100000 } } : {}),
+      // Include budget range when present
+      ...((uf.budget_min != null || uf.budget_max != null) ? { budgetRange_eq: { [lowKey]: uf.budget_min ?? 0, [highKey]: uf.budget_max ?? 10000000 } } : {}),
+      proposalRange_eq: { [lowKey]: uf.proposal_min, [highKey]: uf.proposal_max },
+      ...(uf.experience_level ? { experienceLevel_eq: enumVal(uf.experience_level) } : {}),
+
+    };
+
+    const filterLiteral = toGraphQLInputLiteral(filter);
+    console.log('filterLiteral', filterLiteral);
+
+    const SELECTION = `
       totalCount
       edges {
         node {
@@ -93,66 +240,43 @@ const query = `
           title
           description
           createdDateTime
-          amount {
-            currency
-            rawValue
-          }
-          skills {
-            name
-          }
-          client {
-            location {
-              country
-            }
-          }
+          amount { currency rawValue }
+          skills { name }
+          client { location { country } }
           category
         }
       }
-      pageInfo {
-        hasNextPage
-        endCursor
+      pageInfo { hasNextPage endCursor }
+    `;
+
+    // Inline the filter so tenants with Map scalar are supported
+    const queryBuilt = `
+      query ($searchType: MarketplaceJobPostingSearchType, $sortAttributes: [MarketplaceJobPostingSearchSortAttribute]) {
+        marketplaceJobPostingsSearch(
+          marketPlaceJobFilter: ${filterLiteral}
+          searchType: $searchType
+          sortAttributes: $sortAttributes
+        ) { ${SELECTION} }
       }
-    }
-  }
-`;
+    `;
 
-async function fetchLatestJobs() {
-  const now = new Date();
-  console.log(`\n⏰ Starting job fetch at ${now.toISOString()}`);
-
-  try {
-    // Minimal variables - only supported filter: searchTerm_eq (broad "AI")
-    // No pagination (unsupported via filter/arg) - default ~10 recent jobs
     const variables = {
-      marketPlaceJobFilter: {
-        searchTerm_eq: { andTerms_all: 'AI' },  // Broad keyword; use '' for all recent jobs
-      },
       searchType: 'USER_JOBS_SEARCH',
-      sortAttributes: [{ field: 'RECENCY' }],  // Newest first
+      sortAttributes: [{ field: 'RECENCY' }],
     };
 
-    const envPath = path.resolve(__dirname, '.env');
-    const envConfig = dotenv.parse(await fs.readFile(envPath));
-    let accessToken = envConfig.ACCESS_TOKEN;
-    const refreshToken = envConfig.REFRESH_TOKEN;
-    const clientId = envConfig.CLIENT_ID;
-    const clientSecret = envConfig.CLIENT_SECRET;
-
-    if (!accessToken || !refreshToken || !clientId || !clientSecret) {
-      throw new Error('Missing ACCESS_TOKEN, REFRESH_TOKEN, CLIENT_ID, or CLIENT_SECRET in .env');
-    }
-
-    const doRequest = async (token) => axios.post(
-      'https://api.upwork.com/graphql',
-      { query, variables },
-      {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        timeout: 10000,
-      }
-    );
+    const doRequest = async (token) => {
+      const headers = {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      };
+      if (tenantId) headers['X-Upwork-API-TenantId'] = tenantId;
+      return axios.post(
+        'https://api.upwork.com/graphql',
+        { query: queryBuilt, variables },
+        { headers, timeout: 10000 }
+      );
+    };
 
     let response;
     try {
@@ -180,7 +304,7 @@ async function fetchLatestJobs() {
       throw new Error(`GraphQL errors: ${JSON.stringify(errors, null, 2)}. Check scopes (need 'Read marketplace Job Postings - Public').`);
     }
     if (!data || !data.edges || data.edges.length === 0) {
-      console.log('No jobs found - try empty searchTerm_eq: { andTerms_all: "" } or check API scopes.');
+      console.log('No jobs found - check API scopes or relax filter thresholds (hourly, budget, proposals).');
       return 0;
     }
 
