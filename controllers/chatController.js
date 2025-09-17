@@ -206,12 +206,8 @@ module.exports.editMessage = async (req, res) => {
       [messageId, profileId, thread.id, 'user']
     );
 
-    // Replay only user messages into the new OpenAI thread so the assistant has context
-    for (const m of hist.rows) {
-      if (m.role === 'user') {
-        await openai.beta.threads.messages.create(thread.id, { role: 'user', content: m.content });
-      }
-    }
+    // For privacy-first mode we no longer have plaintext history; seed the new thread with only the edited text
+    await openai.beta.threads.messages.create(thread.id, { role: 'user', content });
 
     // After editing, regenerate assistant reply for the last user message
     const run = await openai.beta.threads.runs.create(thread.id, { assistant_id: assistantId });
