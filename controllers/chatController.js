@@ -220,7 +220,7 @@ module.exports.editMessage = async (req, res) => {
     await db.query('INSERT INTO profile_chat_messages (id, profile_id, thread_id, role, content) VALUES ($1, $2, $3, $4, NULL)', [asstMsgId, profileId, thread.id, 'assistant']);
 
     // Return updated thread id and full message history (now migrated)
-    const newHist = await db.query('SELECT id, role, content, created_at FROM profile_chat_messages WHERE profile_id = $1 AND thread_id = $2 ORDER BY created_at ASC', [profileId, thread.id]);
+    const newHist = await db.query('SELECT id, role, content, content_enc, content_nonce, content_salt, created_at FROM profile_chat_messages WHERE profile_id = $1 AND thread_id = $2 ORDER BY created_at ASC', [profileId, thread.id]);
     return res.json({ thread_id: thread.id, messages: newHist.rows });
   } catch (err) {
     console.error('editMessage error:', err);
