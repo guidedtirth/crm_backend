@@ -221,7 +221,13 @@ module.exports.editMessage = async (req, res) => {
 
     // Return updated thread id and full message history (now migrated)
     const newHist = await db.query('SELECT id, role, content, content_enc, content_nonce, content_salt, created_at FROM profile_chat_messages WHERE profile_id = $1 AND thread_id = $2 ORDER BY created_at ASC', [profileId, thread.id]);
-    return res.json({ thread_id: thread.id, messages: newHist.rows });
+    // Hydrate response with plaintext for the two newest rows (edited user + new assistant) for immediate rendering
+    const hydrated = newHist.rows.map((r) => {
+      if (r.id === messageId) return { ...r, content: content };
+      if (r.id === asstMsgId) return { ...r, content: assistantText };
+      return r;
+    });
+    return res.json({ thread_id: thread.id, messages: hydrated });
   } catch (err) {
     console.error('editMessage error:', err);
     return res.status(500).json({ error: err.message });
