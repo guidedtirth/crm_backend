@@ -1,48 +1,61 @@
 const pool = require('../db');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
+const { v4: uuidv4 } = require('uuid');
 
 exports.signup = async (req, res) => {
-    const { username, email, password, confirmPassword } = req.body;
-
+    const { companyName, email, password, confirmPassword } = req.body || {};
     try {
-        const userCheck = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
-        if (userCheck.rows.length > 0) {
-            return res.json({ status: 409, message: 'Email already exists' });
+        if (!companyName || !email || !password || !confirmPassword) {
+            return res.status(400).json({ message: 'companyName, email, password and confirmPassword are required' });
+        }
+        if (password !== confirmPassword) {
+            return res.status(400).json({ message: 'Passwords do not match' });
         }
 
+        // Find or create company; attach creds to company
+        let company = await pool.query('SELECT id, email FROM companies WHERE name = $1', [companyName]);
+        let companyId;
         const hashedPassword = await bcrypt.hash(password, 10);
+        if (company.rows.length === 0) {
+            companyId = uuidv4();
+            await pool.query('INSERT INTO companies (id, name, email, password) VALUES ($1, $2, $3, $4)', [companyId, companyName, email, hashedPassword]);
+        } else {
+            companyId = company.rows[0].id;
+            // If company exists and already has same email, block
+            if (company.rows[0].email && company.rows[0].email === email) {
+                return res.status(409).json({ status: 409, message: 'Email already exists for this company' });
+            }
+            await pool.query('UPDATE companies SET email = $1, password = $2 WHERE id = $3', [email, hashedPassword, companyId]);
+        }
 
-        await pool.query(
-            'INSERT INTO users (username, email, password) VALUES ($1, $2, $3)',
-            [username, email, hashedPassword]
-        );
-
-        res.json({ status: 200, message: 'User registered successfully' });
+        const token = jwt.sign({ id: companyId, company_id: companyId }, process.env.JWT_SECRET || 'your_jwt_secret');
+        res.json({ status: 200, message: 'Company registered successfully', token, company_id: companyId });
     } catch (error) {
         res.status(500).json({ message: 'Signup failed', error: error.message });
     }
 };
 
 exports.login = async (req, res) => {
-    const { email, password } = req.body;
-
+    const { companyName, email, password } = req.body || {};
     try {
-        const userResult = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
-        const user = userResult.rows[0];
-
-        if (!user) {
-            return res.json({ status: 404, message: 'User does not exist or Wrong Email' });
+        if (!companyName || !email || !password) {
+            return res.status(400).json({ message: 'companyName, email and password are required' });
         }
-
-        const isMatch = await bcrypt.compare(password, user.password);
+        const company = await pool.query('SELECT id, email, password FROM companies WHERE name = $1', [companyName]);
+        if (company.rows.length === 0) {
+            return res.status(404).json({ status: 404, message: 'Company not found' });
+        }
+        const row = company.rows[0];
+        if (!row.email || !row.password || row.email !== email) {
+            return res.status(404).json({ status: 404, message: 'Login not configured for this company or wrong email' });
+        }
+        const isMatch = await bcrypt.compare(password, row.password);
         if (!isMatch) {
-            return res.json({ status: 402, message: 'Invalid password' });
+            return res.status(402).json({ status: 402, message: 'Invalid password' });
         }
-
-        const token = jwt.sign({ id: user.id }, 'your_jwt_secret');
-
-        res.status(200).json({ message: 'Login successful', token, data: { id: user.id, username: user.username, email: user.email } });
+        const token = jwt.sign({ id: row.id, company_id: row.id }, process.env.JWT_SECRET || 'your_jwt_secret');
+        res.status(200).json({ message: 'Login successful', token, company_id: row.id, data: { company_id: row.id, company_name: companyName, email } });
     } catch (error) {
         res.status(500).json({ message: 'Login failed', error: error.message });
     }
@@ -52,23 +65,15 @@ exports.varifyToken =async (req, res) => {
 
     try {
         // 1. Verify JWT token
-        const decoded = jwt.verify(token, 'your_jwt_secret');
+        const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your_jwt_secret');
         const userId = decoded.id;
+        const companyId = decoded.company_id;
 
-        // 2. Query the user from the 'users' table
-        const result = await pool.query(
-            'SELECT id, username, email FROM users WHERE id = $1',
-            [userId]
-        );
-
-        const user = result.rows[0];
-
-        if (!user) {
-            return res.status(404).json({ message: 'User not found' });
-        }
-
-        // 3. Return user info (excluding password)
-        return res.status(200).json({ user });
+        // 2. Return company info (no password)
+        const result = await pool.query('SELECT id, name, email FROM companies WHERE id = $1', [companyId]);
+        const company = result.rows[0];
+        if (!company) return res.status(404).json({ message: 'Company not found' });
+        return res.status(200).json({ company });
 
     } catch (error) {
         return res.status(401).json({ message: 'Invalid or expired token' });

@@ -3,13 +3,17 @@ const db = require('../db');
 exports.getProposalById = async (req, res) => {
     const { profile_id } = req.params;
     try {
+        const companyId = req.user?.company_id;
+        if (!companyId) return res.status(401).json({ status: 401, message: 'Missing company scope' });
         // Fetch all proposal feedback and related data for the profile
         const result = await db.query(`
-                                        SELECT * 
-                                        FROM proposal_feedback 
-                                        WHERE profile_id = $1 
-                                            AND score >= 80
-                                        `, [profile_id]);
+                                        SELECT pf.* 
+                                        FROM proposal_feedback pf
+                                        JOIN profiles p ON p.id = pf.profile_id
+                                        WHERE pf.profile_id = $1
+                                          AND p.company_id = $2
+                                          AND pf.score >= 80
+                                        `, [profile_id, companyId]);
 
         if (result.rows.length === 0) {
             return res.status(404).json({
@@ -41,11 +45,14 @@ exports.deleteProposal = async (req, res) => {
 
     try {
         // Delete proposal feedback by ID
+        const companyId = req.user?.company_id;
+        if (!companyId) return res.status(401).json({ status: 401, message: 'Missing company scope' });
         const result = await db.query(`
-            DELETE FROM proposal_feedback 
-            WHERE id = $1 
-            RETURNING *
-        `, [id]);
+            DELETE FROM proposal_feedback pf
+            USING profiles p
+            WHERE pf.id = $1 AND p.id = pf.profile_id AND p.company_id = $2
+            RETURNING pf.*
+        `, [id, companyId]);
 
         if (result.rows.length === 0) {
             return res.status(404).json({

@@ -38,12 +38,28 @@ async function initializeAssistant() {
       await fs.writeFile(configPath, JSON.stringify(config, null, 2));
       console.log(`Created Assistant with ID: ${assistant.id}`);
     } else {
-      // Update existing assistant to general-purpose
-      await openai.beta.assistants.update(config.assistantId, {
-        instructions: generalInstructions,
-        model: "gpt-4o-mini"
-      });
-      console.log(`Using existing Assistant ID: ${config.assistantId}`);
+      // Try to update; if the ID is stale/missing (404), recreate and persist
+      try {
+        await openai.beta.assistants.update(config.assistantId, {
+          instructions: generalInstructions,
+          model: "gpt-4o-mini"
+        });
+        console.log(`Using existing Assistant ID: ${config.assistantId}`);
+      } catch (err) {
+        const msg = String(err?.message || "");
+        const notFound = (err?.status === 404) || /No assistant found/i.test(msg);
+        if (!notFound) throw err;
+        console.warn(`Assistant ID ${config.assistantId} not found. Recreating…`);
+        const assistant = await openai.beta.assistants.create({
+          name: `GeneralAssistant_${uuidv4()}`,
+          instructions: generalInstructions,
+          model: "gpt-4o-mini",
+          tools: []
+        });
+        config.assistantId = assistant.id;
+        await fs.writeFile(configPath, JSON.stringify(config, null, 2));
+        console.log(`Recreated Assistant with ID: ${assistant.id}`);
+      }
     }
     assistantId = config.assistantId;
     return assistantId;

@@ -27,6 +27,8 @@ const authRoutes = require('./routes/authRoutes');
 const proposalRoutes = require('./routes/proposalRoutes');
 const filtersRoutes = require('./routes/filtersRoutes');
 const chatRoutes = require('./routes/chatRoutes');
+const authMw = require('./middleware/auth');
+const { ensureTenantSchema } = require('./tenant');
 app.use(bodyParser.json({ limit: '5mb' }));
 
 app.use(cors());
@@ -36,14 +38,16 @@ app.use(express.json());
 
 // Routes
 // app.use('/api/jobs', jobRoutes);
-app.use('/api/job-profiles', jobProfileRoutes);
-app.use('/api/profiles', profileRoutes);
-app.use('/api/jobs', jobsRoutes);
-app.use('/api',queryRoutes);
-app.use('/api/proposal', proposalRoutes);
-app.use('/api/filters', filtersRoutes);
-app.use('/api/auth', authRoutes);
-app.use('/api/chat', chatRoutes);
+app.use('/api/auth', authRoutes); // public
+
+// protected routes
+app.use('/api/job-profiles', authMw, jobProfileRoutes);
+app.use('/api/profiles', authMw, profileRoutes);
+app.use('/api/jobs', authMw, jobsRoutes);
+app.use('/api', authMw, queryRoutes);
+app.use('/api/proposal', authMw, proposalRoutes);
+app.use('/api/filters', authMw, filtersRoutes);
+app.use('/api/chat', authMw, chatRoutes);
 
 // Start the Upwork pipeline module (self-initializes scheduling)
 require('./upworkFetcher');
@@ -63,6 +67,9 @@ const initialize = async () => {
 };
 
 initialize();
+
+// Ensure tenant schema
+ensureTenantSchema().catch((e) => console.error('Tenant schema init failed', e));
 
 app.listen(port, () => {
   console.log(`Server running at http://localhost:${port}`);

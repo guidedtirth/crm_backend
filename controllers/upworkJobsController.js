@@ -4,7 +4,14 @@ module.exports = {
   // Get all jobs
   getAllJobs: async (req, res) => {
     try {
-      const { rows } = await db.query(`select * from proposal_feedback where thread_id='thread_EDbkLGtg5pzt5X2s6CLCjs0i'`);
+      const companyId = req.user?.company_id;
+      if (!companyId) return res.status(401).json({ error: 'Missing company scope' });
+      const { rows } = await db.query(`
+        SELECT uj.*
+        FROM upwork_jobs uj
+        ORDER BY uj.inserted_at DESC
+        LIMIT 100
+      `);
       res.json(rows);
     } catch (err) {
       res.status(500).json({ error: err.message });

@@ -110,6 +110,9 @@ module.exports = {
         throw new Error('Assistant not initialized');
       }
 
+      const companyId = req.user?.company_id;
+      if (!companyId) return res.status(401).json({ error: 'Missing company scope' });
+
       const queryData = req.body.query || {};
       const title = queryData.title || '';
       const description = queryData.description || '';
@@ -127,7 +130,7 @@ module.exports = {
 
       if (feedback && threadId && profileIdFromBody) {
         // Refinement path using existing thread and selected profile
-        const profileRes = await pool.query('SELECT name, content FROM profiles WHERE id = $1', [profileIdFromBody]);
+        const profileRes = await pool.query('SELECT name, content FROM profiles WHERE id = $1 AND company_id = $2', [profileIdFromBody, companyId]);
         if (profileRes.rows.length === 0) {
           return res.json({ result: [{ relevance: 'No', score: 0, proposal: 'Profile not found.', thread_id: threadId, created_at: nowIso }] });
         }
@@ -195,7 +198,12 @@ module.exports = {
       });
       const queryEmbedding = embeddingResp.data[0].embedding;
 
-      const embRes = await pool.query('SELECT profile_id, chunk, embedding FROM embeddings');
+      const embRes = await pool.query(`
+        SELECT e.profile_id, e.chunk, e.embedding
+        FROM embeddings e
+        JOIN profiles p ON p.id = e.profile_id
+        WHERE p.company_id = $1
+      `, [companyId]);
       let highestScore = -1;
       let bestProfileId = null;
       const relevantChunks = [];
@@ -220,7 +228,7 @@ module.exports = {
         return res.json({ result: [{ relevance: 'No', score: Math.max(0, Math.floor(highestScore * 100)), proposal: 'No sufficiently relevant profile (>=80) to generate a proposal.', thread_id: null, created_at: nowIso }] });
       }
 
-      const profRes = await pool.query('SELECT name, content FROM profiles WHERE id = $1', [bestProfileId]);
+      const profRes = await pool.query('SELECT name, content FROM profiles WHERE id = $1 AND company_id = $2', [bestProfileId, companyId]);
       if (profRes.rows.length === 0) {
         return res.json({ result: [{ relevance: 'No', score: 0, proposal: 'Profile not found.', thread_id: null, created_at: nowIso }] });
       }

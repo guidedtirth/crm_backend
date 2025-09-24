@@ -81,12 +81,18 @@ module.exports = {
       await ensureTables();
       const assistantId = await ensureAssistant();
       const { profileId } = req.params;
+      const companyId = req.user?.company_id;
+      if (!companyId) return res.status(401).json({ error: 'Missing company scope' });
       const title = req.body?.title || null;
 
       const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
       if (!uuidRegex.test(profileId)) return res.status(400).json({ error: 'Invalid profileId' });
 
       // Reuse existing thread if any
+      // Ensure profile belongs to company
+      const prof = await db.query('SELECT 1 FROM profiles WHERE id = $1 AND company_id = $2', [profileId, companyId]);
+      if (prof.rows.length === 0) return res.status(404).json({ error: 'Profile not found' });
+
       const existing = await db.query('SELECT thread_id FROM profile_chat_threads WHERE profile_id = $1 ORDER BY created_at DESC LIMIT 1', [profileId]);
       if (existing.rows.length > 0) {
         return res.json({ thread_id: existing.rows[0].thread_id });
@@ -109,6 +115,10 @@ module.exports = {
     try {
       await ensureTables();
       const { profileId } = req.params;
+      const companyId = req.user?.company_id;
+      if (!companyId) return res.status(401).json({ error: 'Missing company scope' });
+      const prof = await db.query('SELECT 1 FROM profiles WHERE id = $1 AND company_id = $2', [profileId, companyId]);
+      if (prof.rows.length === 0) return res.json({ thread_id: null, messages: [] });
       const rows = await db.query('SELECT thread_id FROM profile_chat_threads WHERE profile_id = $1 ORDER BY created_at DESC LIMIT 1', [profileId]);
       if (rows.rows.length === 0) return res.json({ thread_id: null, messages: [] });
       const threadId = rows.rows[0].thread_id;
@@ -126,6 +136,10 @@ module.exports = {
       const assistantId = await ensureAssistant();
       const { threadId } = req.params;
       const { profileId, content } = req.body || {};
+      const companyId = req.user?.company_id;
+      if (!companyId) return res.status(401).json({ error: 'Missing company scope' });
+      const prof = await db.query('SELECT 1 FROM profiles WHERE id = $1 AND company_id = $2', [profileId, companyId]);
+      if (prof.rows.length === 0) return res.status(404).json({ error: 'Profile not found' });
       if (!threadId || !profileId || !content) return res.status(400).json({ error: 'threadId, profileId and content are required' });
 
       // Ensure thread exists record for profile
@@ -170,6 +184,8 @@ module.exports.editMessage = async (req, res) => {
     const assistantId = await ensureAssistant();
     const { messageId } = req.params;
     const { profileId, content } = req.body || {};
+    const companyId = req.user?.company_id;
+    if (!companyId) return res.status(401).json({ error: 'Missing company scope' });
     if (!messageId || !profileId || !content) return res.status(400).json({ error: 'messageId, profileId and content are required' });
 
     // Reject optimistic temporary IDs like tmp_...
@@ -181,6 +197,8 @@ module.exports.editMessage = async (req, res) => {
     // Load the message
     const msgRes = await db.query('SELECT id, profile_id, thread_id, role, content, created_at FROM profile_chat_messages WHERE id = $1 AND profile_id = $2', [messageId, profileId]);
     if (msgRes.rows.length === 0) return res.status(404).json({ error: 'Message not found' });
+    const prof = await db.query('SELECT 1 FROM profiles WHERE id = $1 AND company_id = $2', [profileId, companyId]);
+    if (prof.rows.length === 0) return res.status(404).json({ error: 'Profile not found' });
     const target = msgRes.rows[0];
     if (target.role !== 'user') return res.status(400).json({ error: 'Only user messages can be edited' });
 
@@ -239,12 +257,17 @@ module.exports.saveEncrypted = async (req, res) => {
   try {
     await ensureTables();
     const { items } = req.body || {};
+    const companyId = req.user?.company_id;
+    if (!companyId) return res.status(401).json({ error: 'Missing company scope' });
     if (!Array.isArray(items) || items.length === 0) return res.status(400).json({ error: 'items array required' });
 
     for (const it of items) {
       const { id, profile_id, thread_id, role, content_enc, content_nonce, content_salt, created_at } = it || {};
       if (!id || !profile_id || !thread_id || !role || !content_enc || !content_nonce) continue;
       // Try update existing row by id
+      // ensure profile belongs to company
+      const prof = await db.query('SELECT 1 FROM profiles WHERE id = $1 AND company_id = $2', [profile_id, companyId]);
+      if (prof.rows.length === 0) continue;
       const upd = await db.query(
         'UPDATE profile_chat_messages SET content = NULL, content_enc = $1, content_nonce = $2, content_salt = $3 WHERE id = $4 AND profile_id = $5 RETURNING id',
         [content_enc, content_nonce, content_salt || null, id, profile_id]

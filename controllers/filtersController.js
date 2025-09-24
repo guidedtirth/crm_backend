@@ -59,11 +59,22 @@ function sanitizeFilters(payload) {
   return result;
 }
 
-async function getFilters(_req, res) {
+async function getFilters(req, res) {
   try {
-    const r = await db.query('SELECT * FROM job_filters WHERE platform = $1 ORDER BY id ASC LIMIT 1', [PLATFORM]);
+    const companyId = req.user?.company_id;
+    if (!companyId) return res.status(401).json({ error: 'Missing company scope' });
+    const scope = String(req.query.scope || 'company').toLowerCase();
+    const profileId = req.query.profileId || null;
+    let r;
+    if (scope === 'profile' && profileId) {
+      r = await db.query('SELECT * FROM job_filters WHERE platform = $1 AND company_id = $2 AND profile_id = $3 LIMIT 1', [PLATFORM, companyId, profileId]);
+    } else {
+      r = await db.query('SELECT * FROM job_filters WHERE platform = $1 AND company_id = $2 AND profile_id IS NULL LIMIT 1', [PLATFORM, companyId]);
+    }
     if (r.rows.length === 0) {
       return res.json({
+        scope,
+        active: false,
         categoryIds_any: [],
         workload_part_time: false,
         workload_full_time: false,
@@ -82,6 +93,8 @@ async function getFilters(_req, res) {
     }
     const row = r.rows[0];
     return res.json({
+      scope,
+      active: !!row.active,
       categoryIds_any: (row.category_ids || []).map((v) => String(v)),
       workload_part_time: Array.isArray(row.workload) ? row.workload.includes('part_time') || row.workload.includes('as_needed') : false,
       workload_full_time: Array.isArray(row.workload) ? row.workload.includes('full_time') : false,
@@ -104,59 +117,103 @@ async function getFilters(_req, res) {
 
 async function saveFilters(req, res) {
   try {
+    const companyId = req.user?.company_id;
+    if (!companyId) return res.status(401).json({ error: 'Missing company scope' });
+    const scope = String(req.body.scope || 'company').toLowerCase();
+    const active = req.body.active === true || req.body.active === 'true';
+    const profileId = req.body.profileId || null;
     const f = sanitizeFilters(req.body || {});
-    const existing = await db.query('SELECT id FROM job_filters WHERE platform = $1 ORDER BY id ASC LIMIT 1', [PLATFORM]);
-    if (existing.rows.length === 0) {
+
+    if (scope === 'profile') {
+      if (!profileId) return res.status(400).json({ error: 'profileId required for profile scope' });
+      const own = await db.query('SELECT 1 FROM profiles WHERE id = $1 AND company_id = $2', [profileId, companyId]);
+      if (own.rows.length === 0) return res.status(404).json({ error: 'Profile not found' });
       await db.query(
         `INSERT INTO job_filters (
-          platform,
+          platform, company_id, profile_id, active,
           category_ids, workload, verified_payment_only,
           client_hires_min, client_hires_max,
           hourly_rate_min, hourly_rate_max,
           budget_min, budget_max,
           proposal_min, proposal_max,
           experience_level, updated_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW())`,
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,NOW())
+        ON CONFLICT (platform, company_id, profile_id)
+        DO UPDATE SET active = EXCLUDED.active,
+          category_ids = EXCLUDED.category_ids,
+          workload = EXCLUDED.workload,
+          verified_payment_only = EXCLUDED.verified_payment_only,
+          client_hires_min = EXCLUDED.client_hires_min,
+          client_hires_max = EXCLUDED.client_hires_max,
+          hourly_rate_min = EXCLUDED.hourly_rate_min,
+          hourly_rate_max = EXCLUDED.hourly_rate_max,
+          budget_min = EXCLUDED.budget_min,
+          budget_max = EXCLUDED.budget_max,
+          proposal_min = EXCLUDED.proposal_min,
+          proposal_max = EXCLUDED.proposal_max,
+          experience_level = EXCLUDED.experience_level,
+          updated_at = NOW()`,
         [
-          PLATFORM,
+          PLATFORM, companyId, profileId, active,
           f.category_ids, f.workload, f.verified_payment_only,
           f.client_hires_min, f.client_hires_max,
           f.hourly_rate_min, f.hourly_rate_max,
           f.budget_min, f.budget_max,
           f.proposal_min, f.proposal_max,
-          f.experience_level,
+          f.experience_level
         ]
       );
     } else {
-      const id = existing.rows[0].id;
-      await db.query(
+      // Company default: use update-then-insert to avoid relying on a partial unique constraint name
+      const upd = await db.query(
         `UPDATE job_filters SET
-          platform = $1,
-          category_ids = $2,
-          workload = $3,
-          verified_payment_only = $4,
-          client_hires_min = $5,
-          client_hires_max = $6,
-          hourly_rate_min = $7,
-          hourly_rate_max = $8,
-          budget_min = $9,
-          budget_max = $10,
-          proposal_min = $11,
-          proposal_max = $12,
-          experience_level = $13,
-          updated_at = NOW()
-        WHERE id = $14`,
+           active = $3,
+           category_ids = $4,
+           workload = $5,
+           verified_payment_only = $6,
+           client_hires_min = $7,
+           client_hires_max = $8,
+           hourly_rate_min = $9,
+           hourly_rate_max = $10,
+           budget_min = $11,
+           budget_max = $12,
+           proposal_min = $13,
+           proposal_max = $14,
+           experience_level = $15,
+           updated_at = NOW()
+         WHERE platform = $1 AND company_id = $2 AND profile_id IS NULL`,
         [
-          PLATFORM,
+          PLATFORM, companyId, active,
           f.category_ids, f.workload, f.verified_payment_only,
           f.client_hires_min, f.client_hires_max,
           f.hourly_rate_min, f.hourly_rate_max,
           f.budget_min, f.budget_max,
           f.proposal_min, f.proposal_max,
-          f.experience_level,
-          id,
+          f.experience_level
         ]
       );
+      if (upd.rowCount === 0) {
+        await db.query(
+          `INSERT INTO job_filters (
+             platform, company_id, profile_id, active,
+             category_ids, workload, verified_payment_only,
+             client_hires_min, client_hires_max,
+             hourly_rate_min, hourly_rate_max,
+             budget_min, budget_max,
+             proposal_min, proposal_max,
+             experience_level, updated_at
+           ) VALUES ($1,$2,NULL,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,NOW())`,
+          [
+            PLATFORM, companyId, active,
+            f.category_ids, f.workload, f.verified_payment_only,
+            f.client_hires_min, f.client_hires_max,
+            f.hourly_rate_min, f.hourly_rate_max,
+            f.budget_min, f.budget_max,
+            f.proposal_min, f.proposal_max,
+            f.experience_level
+          ]
+        );
+      }
     }
     return res.json({ ok: true });
   } catch (err) {

@@ -10,6 +10,11 @@ const OpenAI = require('openai');
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
+// Structured, minimal logging for pipeline
+function pipelineLog(event, data) {
+  try { console.log(JSON.stringify({ ts: new Date().toISOString(), event, ...data })); } catch {}
+}
+
 // Load environment variables
 dotenv.config();
 
@@ -36,10 +41,9 @@ async function refreshAccessToken(refreshToken, clientId, clientSecret) {
       envContent = envContent.replace(/REFRESH_TOKEN=.*/, `REFRESH_TOKEN=${refresh_token}`);
     }
     await fs.writeFile(envPath, envContent);
-    console.log('🔄 Token refreshed successfully');
     return access_token;  // Returns new access token
   } catch (error) {
-    console.error('❌ Refresh token failed:', error.response?.data?.error || error.message);
+    console.error('Refresh token failed:', error.response?.data?.error || error.message);
     throw new Error('Failed to refresh token. Re-authenticate manually at https://www.upwork.com/developer/apps');
   }
 }
@@ -51,23 +55,19 @@ async function ensureAssistantReady() {
   if (assistantReady) return true;
 
   try {
-    console.log('🔍 Checking assistant status...');
     let assistantId = getAssistantId();
 
     if (!assistantId) {
-      console.log('🔄 Initializing assistant...');
       assistantId = await initializeAssistant();
     }
 
     if (!assistantId) {
       throw new Error('Assistant initialization failed');
     }
-
-    console.log(`✅ Assistant ready (ID: ${assistantId})`);
     assistantReady = true;
     return true;
   } catch (err) {
-    console.error('❌ Assistant preparation failed:', err);
+    console.error('Assistant preparation failed:', err);
     throw err;
   }
 }
@@ -190,9 +190,17 @@ async function loadUpworkFiltersFromDb() {
   }
 }
 
+// -------------------- Incremental sync state (time-window only) --------------------
+const STATE_PATH = path.resolve(__dirname, 'upwork_sync_state.json');
+async function readSyncState() {
+  try { return JSON.parse(await fs.readFile(STATE_PATH, 'utf8')); } catch { return {}; }
+}
+async function writeSyncState(state) {
+  try { await fs.writeFile(STATE_PATH, JSON.stringify(state, null, 2), 'utf8'); } catch {}
+}
+
 async function fetchLatestJobs() {
   const now = new Date();
-  console.log(`\n⏰ Starting job fetch at ${now.toISOString()}`);
 
   try {
     const envPath = path.resolve(__dirname, '.env');
@@ -207,30 +215,10 @@ async function fetchLatestJobs() {
       throw new Error('Missing ACCESS_TOKEN, REFRESH_TOKEN, CLIENT_ID, or CLIENT_SECRET in .env');
     }
 
-    // Discover IntRange key names and build new-style filter (inline literal)
-    const { lowKey, highKey } = await introspectIntRange(accessToken, tenantId);
-
-    // Load filters from DB (single row configuration)
-    const uf = await loadUpworkFiltersFromDb();
-
-    // Build filter from DB values
-    const filter = {
-      ...(Array.isArray(uf.category_ids) && uf.category_ids.length ? { categoryIds_any: uf.category_ids.map(String) } : {}),
-      // Use DB workload directly: when exactly one selected, map to single enum; else omit
-      ...(Array.isArray(uf.workload) && uf.workload.length === 1 ? { workload_eq: enumVal(uf.workload[0] === 'full_time' ? 'FULL_TIME' : 'PART_TIME') } : {}),
-      verifiedPaymentOnly_eq: Boolean(uf.verified_payment_only),
-      clientHiresRange_eq: { [lowKey]: uf.client_hires_min, [highKey]: uf.client_hires_max },
-      // Include hourly range when present
-      ...((uf.hourly_rate_min != null || uf.hourly_rate_max != null) ? { hourlyRate_eq: { [lowKey]: uf.hourly_rate_min ?? 0, [highKey]: uf.hourly_rate_max ?? 100000 } } : {}),
-      // Include budget range when present
-      ...((uf.budget_min != null || uf.budget_max != null) ? { budgetRange_eq: { [lowKey]: uf.budget_min ?? 0, [highKey]: uf.budget_max ?? 10000000 } } : {}),
-      proposalRange_eq: { [lowKey]: uf.proposal_min, [highKey]: uf.proposal_max },
-      ...(uf.experience_level ? { experienceLevel_eq: enumVal(uf.experience_level) } : {}),
-
-    };
-
-    const filterLiteral = toGraphQLInputLiteral(filter);
-    console.log('filterLiteral', filterLiteral);
+    // Time window state: first run → last 24h; subsequent runs → since lastFetchedAt
+    const sync = await readSyncState();
+    const sinceIso = sync.lastFetchedAt || new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    let newestIso = sinceIso;
 
     const SELECTION = `
       totalCount
@@ -239,17 +227,83 @@ async function fetchLatestJobs() {
           id
           title
           description
-          createdDateTime
-          amount { currency rawValue }
-          skills { name }
-          client { location { country } }
+          ciphertext
+          duration
+          durationLabel
+          engagement
+          amount { rawValue currency }
+          recordNumber
+          experienceLevel
           category
+          subcategory
+          freelancersToHire
+          relevance {
+            id
+            effectiveCandidates
+            recommendedEffectiveCandidates
+            uniqueImpressions
+            publishTime
+            hoursInactive
+          }
+          enterprise
+          relevanceEncoded
+          totalApplicants
+          preferredFreelancerLocation
+          preferredFreelancerLocationMandatory
+          premium
+          clientNotSureFields
+          clientPrivateFields
+          applied
+          createdDateTime
+          publishedDateTime
+          renewedDateTime
+          client {
+            totalHires
+            totalPostedJobs
+            totalSpent { rawValue currency }
+            verificationStatus
+            location { country city }
+            totalReviews
+            totalFeedback
+            companyRid
+            edcUserId
+            lastContractPlatform
+            lastContractRid
+            lastContractTitle
+            hasFinancialPrivacy
+          }
+          skills { name }
+          occupations {
+            category { id prefLabel }
+            subCategories { id prefLabel }
+            occupationService { id prefLabel }
+          }
+          hourlyBudgetType
+          hourlyBudgetMin { rawValue currency }
+          hourlyBudgetMax { rawValue currency }
+          localJobUserDistance
+          weeklyBudget { rawValue currency }
+          engagementDuration { weeks }
+          totalFreelancersToHire
+          teamId
+          freelancerClientRelation { __typename }
+
+          job {
+            id
+            content { title description }
+            attachments { id }
+            contractTerms {
+              hourlyContractTerms { engagementDuration { weeks } }
+              fixedPriceContractTerms { engagementDuration { weeks } }
+            }
+          }
         }
       }
       pageInfo { hasNextPage endCursor }
     `;
-
-    // Inline the filter so tenants with Map scalar are supported
+    const fetchPage = async (after) => {
+      const filter = { pagination_eq: { first: 50, after: after || '0' } };
+      const filterLiteral = toGraphQLInputLiteral(filter);
     const queryBuilt = `
       query ($searchType: MarketplaceJobPostingSearchType, $sortAttributes: [MarketplaceJobPostingSearchSortAttribute]) {
         marketplaceJobPostingsSearch(
@@ -259,73 +313,68 @@ async function fetchLatestJobs() {
         ) { ${SELECTION} }
       }
     `;
-
     const variables = {
       searchType: 'USER_JOBS_SEARCH',
       sortAttributes: [{ field: 'RECENCY' }],
     };
-
-    const doRequest = async (token) => {
       const headers = {
-        Authorization: `Bearer ${token}`,
+        Authorization: `Bearer ${accessToken}`,
         'Content-Type': 'application/json',
       };
       if (tenantId) headers['X-Upwork-API-TenantId'] = tenantId;
-      return axios.post(
-        'https://api.upwork.com/graphql',
-        { query: queryBuilt, variables },
-        { headers, timeout: 10000 }
-      );
-    };
-
-    let response;
-    try {
-      response = await doRequest(accessToken);
+      try {
+        return await axios.post('https://api.upwork.com/graphql', { query: queryBuilt, variables }, { headers, timeout: 10000 });
     } catch (err) {
-      console.error('Full API error response:', JSON.stringify(err.response?.data, null, 2));
       if (err.response?.status === 401) {
         console.error('⚠️ Access token invalid. Attempting to refresh via tokenManager...');
         const tm = require('./tokenManager');
         const newAccess = await tm();
         if (!newAccess) throw err;
         accessToken = newAccess;
-        response = await doRequest(accessToken);
-      } else {
+          const headers2 = { ...headers, Authorization: `Bearer ${accessToken}` };
+          return await axios.post('https://api.upwork.com/graphql', { query: queryBuilt, variables }, { headers: headers2, timeout: 10000 });
+        }
         throw err;
       }
+    };
+
+    const collected = [];
+    let after = '0';
+    let keepGoing = true;
+    let pages = 0;
+    while (keepGoing && pages < 20) {
+      pages += 1;
+      const resp = await fetchPage(after);
+      const payload = resp.data?.data?.marketplaceJobPostingsSearch;
+      const edges = payload?.edges || [];
+      const nodes = edges.map(e => e.node);
+      for (const job of nodes) {
+        const created = job.createdDateTime || job.publishedDateTime || null;
+        if (created) {
+          if (created > newestIso) newestIso = created;
+          if (created <= sinceIso) { keepGoing = false; break; }
+        }
+        collected.push(job);
+      }
+      if (!keepGoing) break;
+      const pi = payload?.pageInfo;
+      if (!pi?.hasNextPage || !pi?.endCursor) break;
+      after = pi.endCursor;
     }
+    // silent
 
-    // Log full response for initial debugging (comment out after testing)
-    // console.log('Full GraphQL response:', JSON.stringify(response.data, null, 2));
-
-    const data = response.data.data?.marketplaceJobPostingsSearch;
-    const errors = response.data.errors;
-    if (errors && errors.length > 0) {
-      throw new Error(`GraphQL errors: ${JSON.stringify(errors, null, 2)}. Check scopes (need 'Read marketplace Job Postings - Public').`);
-    }
-    if (!data || !data.edges || data.edges.length === 0) {
-      console.log('No jobs found - check API scopes or relax filter thresholds (hourly, budget, proposals).');
-      return 0;
-    }
-
-    const jobs = data.edges.map(edge => edge.node);
-    console.log(`📄 Fetched ${jobs.length} jobs (total available: ${data.totalCount})`);
-
-    // Post-filter: recent 24h (allow all countries and budgets)
-    const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    const filteredJobs = jobs.filter(job => {
-      const createdDate = new Date(job.createdDateTime);
-      const isRecent = createdDate > oneDayAgo;
-      return isRecent;
-    });
-
-    console.log(`📄 After post-filter (recent only): ${filteredJobs.length} jobs`);
-
-    for (const job of filteredJobs) {
+    for (const job of collected) {
       try {
         const budget = job.amount ? `${job.amount.currency} ${job.amount.rawValue}` : 'Unknown';
 
-        // DB insert with available fields; fallback if extras missing
+        // Normalize job for stable schema regardless of GraphQL selection
+        const rawNode = job;
+    // Store the complete nested job object when present; fallback to the node
+    const jobDataToStore = rawNode?.job ? rawNode.job : rawNode;
+        const jobIdToStore = rawNode?.id || rawNode?.job?.id || null;
+        const titleToStore = rawNode?.title || rawNode?.job?.content?.title || 'Unknown Title';
+
+        // DB insert with normalized job_data; fallback if extended columns missing
         let insertResult;
         try {
           insertResult = await db.query(
@@ -333,13 +382,7 @@ async function fetchLatestJobs() {
              VALUES ($1, $2, $3, NOW(), FALSE, $4, $5)
              ON CONFLICT (job_id) DO NOTHING
              RETURNING id`,
-            [
-              job.id,
-              job.title,
-              JSON.stringify(job),
-              job.client?.location?.country || null,
-              budget
-            ]
+            [ jobIdToStore, titleToStore, JSON.stringify(jobDataToStore), rawNode?.client?.location?.country || null, budget ]
           );
         } catch (colErr) {
           console.warn('Extended columns missing; using basic insert:', colErr.message);
@@ -348,25 +391,24 @@ async function fetchLatestJobs() {
              VALUES ($1, $2, $3, NOW(), FALSE)
              ON CONFLICT (job_id) DO NOTHING
              RETURNING id`,
-            [job.id, job.title, JSON.stringify(job)]
+            [jobIdToStore, titleToStore, JSON.stringify(jobDataToStore)]
           );
         }
-        if (insertResult.rowCount > 0) {
-          console.log(`✅ Stored job: ${job.title.slice(0, 50)}... (Budget: ${budget}, Date: ${job.createdDateTime.slice(0, 10)})`);
-        }
+        // silent per-job store
       } catch (dbError) {
         console.error('Database insertion error:', dbError.message);
       }
     }
 
-    console.log(`\n🎉 Successfully processed ${filteredJobs.length} jobs`);
-    return filteredJobs.length;
+    await writeSyncState({ lastFetchedAt: newestIso });
+    return collected;
   } catch (error) {
-    console.error('\n❌ Error in job processing:', error.message);
+    console.error('Error in job processing:', error.message);
     throw error;
   }
 }
 
+// Compatibility helper retained (no longer used by pipeline)
 async function generateProposal(job, job_id) {
   try {
     await ensureAssistantReady();
@@ -376,9 +418,10 @@ async function generateProposal(job, job_id) {
     const skills = Array.isArray(job?.skills)
       ? job.skills.map(s => s.name || s.prettyName || '').filter(Boolean)
       : [];
-    const title = job?.title || 'Unknown Title';
-    const job_id_final = job_id || job?.id || job?.job_id || null; // Upwork job_id (text)
-    const description = job?.description || '';
+    // Support both shapes: full node and nested raw.job
+    const title = job?.title || job?.content?.title || job?.job?.content?.title || 'Unknown Title';
+    const job_id_final = job_id || job?.id || job?.job_id || job?.job?.id || null; // Upwork job_id (text)
+    const description = job?.description || job?.content?.description || job?.job?.content?.description || '';
     const queryText = `${title} ${description} ${skills.join(' ')}`;
 
     // Find best profile by embeddings
@@ -499,50 +542,272 @@ async function generateProposal(job, job_id) {
     throw err;
   }
 }
-async function processNewJobs() {
-  console.log('\n⏰ Starting proposal generation for new jobs...');
+// ---------------- New filtering and per-profile processing (no embeddings) ----------------
+
+function normalizeJobForFilter(node) {
+  // Keep original node; many fields are at top-level, while nested job holds content/contractTerms
+  return node || {};
+}
+
+function getNum(v) { const x = Number(v); return Number.isFinite(x) ? x : null; }
+
+function jobMatchesFilter(job, f) {
   try {
-    const result = await db.query(
-      `SELECT id, job_id, job_data 
-       FROM upwork_jobs 
-       WHERE proposal_generated = FALSE 
-       ORDER BY inserted_at ASC 
-       LIMIT 10`
+    if (!f) return true;
+    const J = job?.job || job; // nested job fallback
+    const categoryId = job?.occupations?.category?.id || J?.occupations?.category?.id || job?.category || J?.category || null;
+    if (Array.isArray(f.category_ids) && f.category_ids.length) {
+      const ok = f.category_ids.map(String).includes(String(categoryId || ''));
+      if (!ok) return false;
+    }
+    // Workload
+    if (Array.isArray(f.workload) && f.workload.length) {
+      const isFull = String(job?.engagement || J?.engagement || '').toLowerCase().includes('30+');
+      const targetFull = f.workload.includes('full_time');
+      const targetPart = f.workload.some(w => w === 'part_time' || w === 'as_needed');
+      if (isFull && !targetFull) return false;
+      if (!isFull && targetFull && !targetPart) return false;
+    }
+    // Verified payment
+    if (typeof f.verified_payment_only === 'boolean' && f.verified_payment_only) {
+      const verified = ((job?.client?.verificationStatus || J?.client?.verificationStatus || '')).toUpperCase() === 'VERIFIED';
+      if (!verified) return false;
+    }
+    // Client hires
+    const hires = getNum(job?.client?.totalHires ?? J?.client?.totalHires);
+    if (f.client_hires_min != null && (hires == null || hires < Number(f.client_hires_min))) return false;
+    if (f.client_hires_max != null && (hires == null || hires > Number(f.client_hires_max))) return false;
+    // Hourly
+    const hMin = getNum(job?.hourlyBudgetMin?.rawValue ?? J?.hourlyBudgetMin?.rawValue);
+    const hMax = getNum(job?.hourlyBudgetMax?.rawValue ?? J?.hourlyBudgetMax?.rawValue);
+    if (f.hourly_rate_min != null && (hMin == null || Number(f.hourly_rate_min) > (hMax ?? hMin))) return false;
+    if (f.hourly_rate_max != null && (hMax == null || Number(f.hourly_rate_max) < (hMin ?? hMax))) return false;
+    // Budget (fixed)
+    const amount = getNum(job?.amount?.rawValue ?? J?.amount?.rawValue);
+    if (f.budget_min != null && (amount == null || amount < Number(f.budget_min))) return false;
+    if (f.budget_max != null && (amount == null || amount > Number(f.budget_max))) return false;
+    // Proposals / applicants
+    const applicants = getNum(job?.totalApplicants ?? J?.totalApplicants);
+    if (f.proposal_min != null && (applicants == null || applicants < Number(f.proposal_min))) return false;
+    if (f.proposal_max != null && (applicants == null || applicants > Number(f.proposal_max))) return false;
+    // Experience
+    if (f.experience_level && String(f.experience_level).length) {
+      const exp = (job?.experienceLevel || J?.experienceLevel || '').toUpperCase();
+      if (exp !== String(f.experience_level).toUpperCase()) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function loadActiveFiltersByCompany(companyId) {
+  const rows = await db.query(
+    `SELECT profile_id, active, category_ids, workload, verified_payment_only,
+            client_hires_min, client_hires_max,
+            hourly_rate_min, hourly_rate_max,
+            budget_min, budget_max,
+            proposal_min, proposal_max,
+            experience_level
+       FROM job_filters
+      WHERE platform = 'upwork' AND company_id = $1 AND active = TRUE`,
+    [companyId]
+  );
+  const profileFilters = new Map();
+  let companyFilter = null;
+  for (const r of rows.rows) {
+    if (r.profile_id) profileFilters.set(String(r.profile_id), r);
+    else companyFilter = r;
+  }
+  return { companyFilter, profileFilters };
+}
+
+async function ensureChatTables() {
+  // Create chat thread/message tables if missing (mirrors chatController)
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS profile_chat_threads (
+      id UUID PRIMARY KEY,
+      profile_id UUID NOT NULL,
+      thread_id TEXT NOT NULL,
+      title TEXT,
+      created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+      updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
     );
+  `);
+  await db.query(`CREATE INDEX IF NOT EXISTS idx_profile_chat_threads_profile ON profile_chat_threads(profile_id);`);
+  await db.query(`CREATE UNIQUE INDEX IF NOT EXISTS uq_profile_chat_thread_latest ON profile_chat_threads(profile_id, thread_id);`);
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS profile_chat_messages (
+      id UUID PRIMARY KEY,
+      profile_id UUID NOT NULL,
+      thread_id TEXT NOT NULL,
+      role TEXT NOT NULL CHECK (role IN ('user','assistant')),
+      content TEXT,
+      created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    );
+  `);
+  await db.query(`CREATE INDEX IF NOT EXISTS idx_profile_chat_messages_thread ON profile_chat_messages(thread_id, created_at);`);
+  try { await db.query("ALTER TABLE profile_chat_messages ADD COLUMN IF NOT EXISTS content_enc TEXT"); } catch (e) {}
+  try { await db.query("ALTER TABLE profile_chat_messages ADD COLUMN IF NOT EXISTS content_nonce TEXT"); } catch (e) {}
+  try { await db.query("ALTER TABLE profile_chat_messages ADD COLUMN IF NOT EXISTS content_salt TEXT"); } catch (e) {}
+  try { await db.query("ALTER TABLE profile_chat_messages ALTER COLUMN content DROP NOT NULL"); } catch (e) {}
+}
 
-    let processedCount = 0;
-    const jobs = result.rows;
+async function ensureProposalFeedbackTable() {
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS proposal_feedback (
+      id UUID PRIMARY KEY,
+      profile_id UUID NOT NULL,
+      job_id TEXT,
+      query_text TEXT,
+      feedback TEXT,
+      proposal TEXT,
+      thread_id TEXT,
+      score INTEGER,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+  await db.query(`CREATE INDEX IF NOT EXISTS idx_proposal_feedback_profile ON proposal_feedback(profile_id);`);
+  await db.query(`CREATE INDEX IF NOT EXISTS idx_proposal_feedback_job_profile ON proposal_feedback(job_id, profile_id);`);
+}
 
-    console.log(`📄 Found ${jobs.length} jobs to process`);
-    for (const row of jobs) {
-      try {
-        const job = row.job_data;
-        console.log(`Processing job ID: ${row.id}, Title: ${job.title || 'Unknown'}`);
-        const genResult = await generateProposal(job, row.job_id);
+async function ensureProfileThread(profileId) {
+  // Reuse latest thread if exists else create
+  const existing = await db.query('SELECT thread_id FROM profile_chat_threads WHERE profile_id = $1 ORDER BY created_at DESC LIMIT 1', [profileId]);
+  if (existing.rows.length > 0) return existing.rows[0].thread_id;
+  const thread = await openai.beta.threads.create();
+  const id = uuidv4();
+  await db.query('INSERT INTO profile_chat_threads (id, profile_id, thread_id, title) VALUES ($1, $2, $3, $4)', [id, profileId, thread.id, 'Auto']);
+  return thread.id;
+}
 
-        // Respect 80% threshold: skip downstream writes and DO NOT mark as processed if low score or missing profile
-        if (genResult.relevance !== 'Yes' || !genResult.profile_id || (genResult.score ?? 0) < 80) {
-          console.log(`↪️  Skipped job ${row.id} due to low score (${genResult.score || 0}) or missing profile (left unprocessed)`);
-          continue;
+function extractJson(text) {
+  if (!text) return null;
+  const m = text.match(/\{[\s\S]*\}/);
+  if (!m) return null;
+  try { return JSON.parse(m[0]); } catch { return null; }
+}
+
+async function pollRunLocal(threadId, runId) {
+  let run = { id: runId, status: 'queued' };
+  let attempts = 0;
+  while (run.status !== 'completed') {
+    attempts += 1;
+    await new Promise(r => setTimeout(r, 800));
+    const apiUrl = `https://api.openai.com/v1/threads/${threadId}/runs/${runId}`;
+    const resp = await axios.get(apiUrl, {
+      headers: {
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        'Content-Type': 'application/json',
+        'OpenAI-Beta': 'assistants=v2'
+      },
+      timeout: 15000
+    });
+    run = resp.data;
+    if (['failed','cancelled','expired'].includes(run.status)) {
+      throw new Error(`Assistant run ${run.status}: ${run.last_error?.message || 'unknown'}`);
+    }
+    if (attempts > 40) throw new Error('Polling timeout');
+  }
+}
+
+async function assessAndMaybeGenerate(job, companyId, profileId) {
+  const title = job?.title || job?.content?.title || job?.job?.content?.title || 'Unknown Title';
+  const description = job?.description || job?.content?.description || job?.job?.content?.description || '';
+  const skills = Array.isArray(job?.skills) ? job.skills.map(s => s.name || s.prettyName || '').filter(Boolean) : [];
+  const threadId = await ensureProfileThread(profileId);
+
+  // Serialize full job payload (prefer nested raw.job if present)
+  const jobPayload = job?.job ? job.job : job;
+  let jobJson = '';
+  try { jobJson = JSON.stringify(jobPayload); } catch { jobJson = JSON.stringify({ title, description, skills }); }
+  // Guardrail: cap extremely large payloads
+  if (jobJson.length > 60000) jobJson = jobJson.slice(0, 60000) + '\n/* truncated */';
+
+  const prompt = [
+    `You are an assistant evaluating job-to-user fit and writing proposals.`,
+    `Use ONLY the job title and the JSON job object provided below (plus any prior thread context).`,
+    `Return STRICT JSON with keys: score (0-100), suitable (true/false), proposal (string).`,
+    `If suitable >= 80, include a concise, tailored plain-text proposal (no markdown).`,
+    `JOB_TITLE: ${title}`,
+    `JOB_JSON_START`,
+    jobJson,
+    `JOB_JSON_END`
+  ].join('\n');
+
+  await openai.beta.threads.messages.create(threadId, { role: 'user', content: prompt });
+  const assistantId = getAssistantId();
+  const run = await openai.beta.threads.runs.create(threadId, { assistant_id: assistantId });
+  await pollRunLocal(threadId, run.id);
+  const messages = await openai.beta.threads.messages.list(threadId, { limit: 1, order: 'desc' });
+  const text = messages.data[0]?.content?.[0]?.text?.value || '';
+  const parsed = extractJson(text) || {};
+  const score = Number(parsed.score || parsed.compatibility || 0);
+  const suitable = parsed.suitable === true || score >= 80;
+  const proposal = String(parsed.proposal || '').trim();
+  return { suitable, score: Math.floor(score), proposal, threadId };
+}
+
+async function processNewJobs(jobs) {
+  try {
+    await ensureChatTables();
+    await ensureProposalFeedbackTable();
+    // Collect companies with profiles
+    const companies = await db.query('SELECT DISTINCT company_id FROM profiles WHERE company_id IS NOT NULL');
+    let generated = 0;
+    for (const c of companies.rows) {
+      const companyId = c.company_id;
+      const { companyFilter, profileFilters } = await loadActiveFiltersByCompany(companyId);
+      const profRows = await db.query('SELECT id, name FROM profiles WHERE company_id = $1', [companyId]);
+      for (const pr of profRows.rows) {
+        const profileId = String(pr.id);
+        const hasProfile = profileFilters.has(profileId);
+        const filter = profileFilters.get(profileId) || companyFilter || null; // pass-all if none configured
+        const filterScope = hasProfile ? 'profile' : (companyFilter ? 'company' : 'none');
+
+        const filteredJobIds = [];
+        for (const node of jobs) {
+          const externalJobId = node?.id || node?.job?.id || null;
+          if (!externalJobId) continue;
+
+          // Skip if already generated for this profile+job
+          const exists = await db.query('SELECT 1 FROM proposal_feedback WHERE job_id = $1 AND profile_id = $2 LIMIT 1', [externalJobId, profileId]);
+          if (exists.rowCount > 0) continue;
+
+          // Load canonical job_data from DB (exact JSONB we persisted)
+          let jobNode = null;
+          try {
+            const jd = await db.query('SELECT job_data FROM upwork_jobs WHERE job_id = $1 LIMIT 1', [externalJobId]);
+            jobNode = jd.rows[0]?.job_data || null;
+          } catch {}
+          if (!jobNode) jobNode = normalizeJobForFilter(node);
+
+          if (!jobMatchesFilter(jobNode, filter)) continue;
+          filteredJobIds.push(externalJobId);
+
+          try {
+            const { suitable, score, proposal, threadId } = await assessAndMaybeGenerate(jobNode, companyId, profileId);
+            if (!suitable || score < 80 || !proposal) continue;
+
+            const feedbackId = uuidv4();
+            await db.query(
+              'INSERT INTO proposal_feedback (id, profile_id, job_id, query_text, feedback, proposal, thread_id, score, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW())',
+              [feedbackId, profileId, externalJobId, JSON.stringify({ id: externalJobId, title: (jobNode.title || jobNode?.content?.title || '') }), null, proposal, threadId, score]
+            );
+            // Optional: flag job as having at least one proposal
+            try { await db.query('UPDATE upwork_jobs SET proposal_generated = TRUE WHERE job_id = $1', [externalJobId]); } catch {}
+            generated++;
+            pipelineLog('score', { companyId, profileId, jobId: externalJobId, score, suitable: true, saved: true });
+          } catch (e) {
+            console.warn(`profile ${profileId} job ${externalJobId} generation failed: ${e.message}`);
+          }
         }
-
-        let res=await db.query(
-          `UPDATE upwork_jobs 
-           SET proposal_generated = TRUE
-           WHERE job_id = $1 returning proposal_generated`,
-          [row.job_id]
-        );
-        
-        processedCount++;
-      } catch (err) {
-        console.error(`❌ Failed to process job ${row.id || 'unknown'}:`, err.message);
+        pipelineLog('filter.used', { companyId, profileId, scope: filterScope, filteredCount: filteredJobIds.length, jobIds: filteredJobIds });
       }
     }
-
-    console.log(`\n🎉 Processed ${processedCount} jobs successfully`);
-    return processedCount;
+    return generated;
   } catch (err) {
-    console.error('❌ Job processing failed:', err.message);
+    console.error('Job processing failed:', err.message);
     throw err;
   }
 }
@@ -556,15 +821,11 @@ async function runJobPipeline() {
   isPipelineRunning = true;
   try {
     await ensureAssistantReady();
-
-    console.log('\n🚀 Starting job pipeline...');
-    const fetchedCount = await fetchLatestJobs();
-    const processedCount = await processNewJobs();
-
-    console.log(`\n🏁 Pipeline completed. Fetched: ${fetchedCount}, Processed: ${processedCount}`);
-    console.log(`\n🏁 Pipeline completed. Processed: ${processedCount}`);
+    const jobs = await fetchLatestJobs();
+    const processedCount = await processNewJobs(jobs);
+    pipelineLog('pipeline.done', { fetched: jobs.length, processed: processedCount });
   } catch (err) {
-    console.error('❌ Pipeline failed:', err.message);
+    console.error('Pipeline failed:', err.message);
   } finally {
     isPipelineRunning = false;
   }
@@ -572,7 +833,6 @@ async function runJobPipeline() {
 
 async function startApplication() {
   try {
-    console.log('🚀 Starting Upwork Job Processor (Node-only)...');
 
     // Initialize assistant
     await ensureAssistantReady();
@@ -581,14 +841,9 @@ async function startApplication() {
     await runJobPipeline();
 
     // Schedule regular runs
-    cron.schedule('*/5 * * * *', () => {
-      console.log('\n⏰ Scheduled run triggered');
-      runJobPipeline().catch(console.error);
-    });
-
-    console.log('\n🟢 System ready and scheduled');
+    cron.schedule('*/5 * * * *', () => { runJobPipeline().catch(console.error); });
   } catch (startupError) {
-    console.error('❌ Startup failed:', startupError.message);
+    console.error('Startup failed:', startupError.message);
     process.exit(1);
   }
 }
@@ -601,13 +856,12 @@ process.stdin.resume();
 
 // Graceful shutdown
 process.on('SIGINT', async () => {
-  console.log('\n🛑 Received shutdown signal...');
   try {
     await db.end();
-    console.log('✅ Database connection closed');
+    // silent
     process.exit(0);
   } catch (err) {
-    console.error('❌ Shutdown error:', err);
+    console.error('Shutdown error:', err);
     process.exit(1);
   }
 });

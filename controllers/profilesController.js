@@ -9,7 +9,9 @@ exports.createProfile = async (req, res) => {
   try {
     console.log("Creating profile with data:", req.body);
     const { name } = req.body;
-    const result = await pool.query("INSERT INTO profiles (name) VALUES ($1) RETURNING *", [name]);
+    const companyId = req.user?.company_id;
+    if (!companyId) return res.status(401).json({ error: 'Missing company scope' });
+    const result = await pool.query("INSERT INTO profiles (name, company_id) VALUES ($1, $2) RETURNING *", [name, companyId]);
 
     res.json(result.rows[0]);
   } catch (err) {
@@ -18,9 +20,11 @@ exports.createProfile = async (req, res) => {
   }
 };
 
-exports.getProfiles = async (_req, res) => {
+exports.getProfiles = async (req, res) => {
   try {
-    const result = await pool.query("SELECT * FROM profiles ORDER BY last_updated DESC");
+    const companyId = req.user?.company_id;
+    if (!companyId) return res.status(401).json({ error: 'Missing company scope' });
+    const result = await pool.query("SELECT * FROM profiles WHERE company_id = $1 ORDER BY last_updated DESC", [companyId]);
     res.json(result.rows);
   } catch (err) {
     console.error(err.message);
@@ -34,7 +38,9 @@ exports.deleteProfile = async (req, res) => {
     const { id } = req.params;
 
     // 1. Fetch training_file info for the profile
-    const profileRes = await pool.query("SELECT training_file FROM profiles WHERE id = $1::uuid", [id]);
+    const companyId = req.user?.company_id;
+    if (!companyId) return res.status(401).json({ error: 'Missing company scope' });
+    const profileRes = await pool.query("SELECT training_file FROM profiles WHERE id = $1::uuid AND company_id = $2", [id, companyId]);
     
     if (profileRes.rows.length === 0) {
       return res.status(404).json({ error: 'Profile not found' });
@@ -62,7 +68,7 @@ exports.deleteProfile = async (req, res) => {
     }
 
     // 3. Delete profile from DB
-    await pool.query("DELETE FROM profiles WHERE id = $1::uuid", [id]);
+    await pool.query("DELETE FROM profiles WHERE id = $1::uuid AND company_id = $2", [id, companyId]);
 
     res.json({ 
       message: "Profile and files deleted successfully",
@@ -88,8 +94,10 @@ exports.allowTrainProfile = async (req, res) => {
       return res.status(400).json({ error: 'Invalid profileId format' });
     }
 
+    const companyId = req.user?.company_id;
+    if (!companyId) return res.status(401).json({ error: 'Missing company scope' });
     // Update profile to allow training
-    await pool.query("UPDATE profiles SET trainable_profile = FALSE WHERE id = $1", [profileId]);
+    await pool.query("UPDATE profiles SET trainable_profile = FALSE WHERE id = $1 AND company_id = $2", [profileId, companyId]);
     
     res.json({ message: "Profile training enabled successfully" });
   } catch (err) {
