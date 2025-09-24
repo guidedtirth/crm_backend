@@ -3,7 +3,7 @@ const cors = require('cors');
 const fs = require('fs').promises;
 const bodyParser = require('body-parser');
 const { initializeAssistant } = require('./assistant');
-const refreshToken = require('./tokenManager');
+const { refreshToken } = require('./platforms');
 const app = express();
 const port = 3009;
 const path = require('path');
@@ -20,8 +20,8 @@ initializeAssistant().catch(err => {
 
 // const jobRoutes = require('./routes/jobRoutes');
 const jobProfileRoutes = require('./routes/jobProfileRoutes');
-const profileRoutes = require('./routes/profiles');
-const jobsRoutes = require('./routes/upworkJobsRoutes');
+const profileRoutes = require('./routes/profilesRoutes');
+const jobsRoutes = require('./platforms/upwork/routes/upworkJobsRoutes');
 const queryRoutes = require("./routes/queryRoutes");
 const authRoutes = require('./routes/authRoutes');
 const proposalRoutes = require('./routes/proposalRoutes');
@@ -49,8 +49,8 @@ app.use('/api/proposal', authMw, proposalRoutes);
 app.use('/api/filters', authMw, filtersRoutes);
 app.use('/api/chat', authMw, chatRoutes);
 
-// Start the Upwork pipeline module (self-initializes scheduling)
-require('./upworkFetcher');
+// Start platform pipelines via registry (Upwork self-initializes)
+require('./platforms');
 
 
 const initialize = async () => {

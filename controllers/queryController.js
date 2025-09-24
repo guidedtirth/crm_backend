@@ -1,3 +1,7 @@
+/**
+ * Query Controller
+ * Proposal generation/refinement endpoints (initial + feedback paths).
+ */
 const fs = require('fs').promises;
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
@@ -9,6 +13,7 @@ const axios = require('axios'); // Added for raw HTTP call
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
+/** Cosine similarity helper for embedding arrays */
 function cosineSimilarity(a, b) {
   if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return 0;
   let dot = 0;
@@ -25,6 +30,10 @@ function cosineSimilarity(a, b) {
   return dot / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
+/**
+ * Use Assistants API to generate a proposal, given text inputs.
+ * Returns { proposal, threadId }.
+ */
 async function generateAssistantProposal({ profileContent, queryText, budgetMin, budgetMax, threadId, assistantId, feedback }) {
   const messageContent = [
     `Profile: ${profileContent}`,

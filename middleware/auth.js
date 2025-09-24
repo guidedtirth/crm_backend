@@ -1,3 +1,6 @@
+/**
+ * Auth Middleware: validate JWT, attach { id, company_id } to req.user
+ */
 const jwt = require('jsonwebtoken');
 
 module.exports = function auth(req, res, next) {

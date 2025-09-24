@@ -1,8 +1,13 @@
+/**
+ * Auth Controller
+ * Company signup/login and token verification (company-scoped JWT)
+ */
 const pool = require('../db');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
 
+/** Register a company (id = company_id), attach email/password */
 exports.signup = async (req, res) => {
     const { companyName, email, password, confirmPassword } = req.body || {};
     try {
@@ -36,6 +41,7 @@ exports.signup = async (req, res) => {
     }
 };
 
+/** Login for an existing company (email/password on companies row) */
 exports.login = async (req, res) => {
     const { companyName, email, password } = req.body || {};
     try {
@@ -60,7 +66,8 @@ exports.login = async (req, res) => {
         res.status(500).json({ message: 'Login failed', error: error.message });
     }
 };
-exports.varifyToken =async (req, res) => {
+/** Verify JWT sent in path and return company info */
+exports.verifyToken =async (req, res) => {
     const { token } = req.params;
 
     try {

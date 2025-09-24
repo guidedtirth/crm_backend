@@ -1,3 +1,7 @@
+/**
+ * Proposal Controller
+ * List/delete proposals (score >= 80 persisted by pipeline).
+ */
 const db = require('../db');
 
 exports.getProposalById = async (req, res) => {

@@ -25,7 +25,7 @@ const refreshToken = async () => {
     // console.log('✅ Refreshed Access Token:', newAccessToken);
 
     // Update .env file
-    const envPath = path.resolve(__dirname, '.env');
+    const envPath = path.resolve(__dirname, '../../.env');
     let envContent = fs.readFileSync(envPath, 'utf8');
 
     envContent = envContent.replace(/ACCESS_TOKEN=.*/g, `ACCESS_TOKEN=${newAccessToken}`);

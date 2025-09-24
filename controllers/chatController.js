@@ -1,3 +1,7 @@
+/**
+ * Chat Controller
+ * Start/reuse threads, get history, post/edit messages, and save encrypted copies.
+ */
 const { v4: uuidv4 } = require('uuid');
 const axios = require('axios');
 const OpenAI = require('openai');
@@ -7,6 +11,7 @@ const { getAssistantId, initializeAssistant } = require('../assistant');
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 let tablesReady = false;
 
+/** Ensure chat tables exist */
 async function ensureTables() {
   if (tablesReady) return;
   await db.query(`
@@ -46,12 +51,14 @@ async function ensureTables() {
   tablesReady = true;
 }
 
+/** Ensure a cached Assistant id exists */
 async function ensureAssistant() {
   if (getAssistantId()) return getAssistantId();
   const id = await initializeAssistant();
   return id;
 }
 
+/** Poll a run until completion or failure */
 async function pollRun(threadId, runId) {
   let run = { id: runId, status: 'queued' };
   let attempts = 0;

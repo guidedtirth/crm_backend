@@ -1,3 +1,7 @@
+/**
+ * Profiles Controller
+ * Create/list/delete profiles and manage training flags/files.
+ */
 const pool = require("../db");
 const pdfParse = require("pdf-parse");
 const path = require("path");
@@ -5,6 +9,7 @@ const fs = require("fs").promises;
 const util = require("util");
 const exec = util.promisify(require("child_process").exec);
 
+/** Create a profile under the authenticated company */
 exports.createProfile = async (req, res) => {
   try {
     console.log("Creating profile with data:", req.body);
@@ -20,6 +25,7 @@ exports.createProfile = async (req, res) => {
   }
 };
 
+/** List profiles for the authenticated company */
 exports.getProfiles = async (req, res) => {
   try {
     const companyId = req.user?.company_id;
@@ -33,6 +39,7 @@ exports.getProfiles = async (req, res) => {
 };
 
 
+/** Delete a profile and any associated training files from disk */
 exports.deleteProfile = async (req, res) => {
   try {
     const { id } = req.params;
@@ -84,6 +91,7 @@ exports.deleteProfile = async (req, res) => {
   }
 };
 
+/** Enable/disable profile training flag (currently sets trainable_profile = FALSE) */
 exports.allowTrainProfile = async (req, res) => {
   try {
     const { profileId } = req.params;

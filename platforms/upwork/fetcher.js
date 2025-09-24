@@ -1,11 +1,15 @@
+/**
+ * Upwork platform fetcher
+ * Incremental job sync, internal filtering, assistant scoring, and proposal persistence.
+ */
 const axios = require('axios');
 const fs = require('fs').promises;
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 const dotenv = require('dotenv');
 const cron = require('node-cron');
-const { getAssistantId, initializeAssistant } = require('./assistant');
-const db = require('./db');
+const { getAssistantId, initializeAssistant } = require('../../assistant');
+const db = require('../../db');
 const OpenAI = require('openai');
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -34,7 +38,7 @@ async function refreshAccessToken(refreshToken, clientId, clientSecret) {
       { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
     );
     const { access_token, refresh_token } = response.data; // Gets new tokens
-    const envPath = path.resolve(__dirname, '.env');
+    const envPath = path.resolve(__dirname, '../../.env');
     let envContent = await fs.readFile(envPath, 'utf8');
     envContent = envContent.replace(/ACCESS_TOKEN=.*/, `ACCESS_TOKEN=${access_token}`);
     if (refresh_token) {
@@ -203,7 +207,7 @@ async function fetchLatestJobs() {
   const now = new Date();
 
   try {
-    const envPath = path.resolve(__dirname, '.env');
+    const envPath = path.resolve(__dirname, '../../.env');
     const envConfig = dotenv.parse(await fs.readFile(envPath));
     let accessToken = envConfig.ACCESS_TOKEN;
     const refreshToken = envConfig.REFRESH_TOKEN;
@@ -715,7 +719,9 @@ async function assessAndMaybeGenerate(job, companyId, profileId) {
   const title = job?.title || job?.content?.title || job?.job?.content?.title || 'Unknown Title';
   const description = job?.description || job?.content?.description || job?.job?.content?.description || '';
   const skills = Array.isArray(job?.skills) ? job.skills.map(s => s.name || s.prettyName || '').filter(Boolean) : [];
-  const threadId = await ensureProfileThread(profileId);
+  // Create a fresh assistant thread per job evaluation (do not reuse)
+  const newThread = await openai.beta.threads.create();
+  const threadId = newThread.id;
 
   // Serialize full job payload (prefer nested raw.job if present)
   const jobPayload = job?.job ? job.job : job;

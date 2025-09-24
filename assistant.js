@@ -1,3 +1,4 @@
+// Assistant bootstrapper: ensures an OpenAI Assistant ID exists and self-heals if stale
 const { v4: uuidv4 } = require('uuid');
 const path = require('path');
 const fs = require('fs').promises;

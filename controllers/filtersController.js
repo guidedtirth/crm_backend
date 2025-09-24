@@ -1,12 +1,18 @@
+/**
+ * Filters Controller
+ * CRUD-style access to per-company and per-profile Upwork filters.
+ */
 const db = require('../db');
 const PLATFORM = 'upwork';
 
+/** Parse array-like input to string array */
 function parseStringArray(input) {
   if (Array.isArray(input)) return input.map((x) => String(x).trim()).filter(Boolean);
   if (typeof input === 'string') return input.split(',').map((s) => s.trim()).filter(Boolean);
   return [];
 }
 
+/** Parse range like "min-max" into { min, max } */
 function parseRangeString(input) {
   if (!input || typeof input !== 'string') return { min: null, max: null };
   const [a, b] = input.split('-').map((s) => s.trim());
@@ -15,6 +21,7 @@ function parseRangeString(input) {
   return { min: Number.isFinite(min) ? min : null, max: Number.isFinite(max) ? max : null };
 }
 
+/** Normalize and validate incoming filter payload */
 function sanitizeFilters(payload) {
   const NUM = (v, d = null) => (v === null || v === undefined || v === '' ? d : Number(v));
   const BOOL = (v, d = false) => (typeof v === 'boolean' ? v : v === 'true' ? true : v === 'false' ? false : d);
@@ -59,6 +66,7 @@ function sanitizeFilters(payload) {
   return result;
 }
 
+/** Return the active filter for company or a specific profile (if scope=profile) */
 async function getFilters(req, res) {
   try {
     const companyId = req.user?.company_id;
@@ -115,6 +123,7 @@ async function getFilters(req, res) {
   }
 }
 
+/** Upsert filters for company or a specific profile (scope in body) */
 async function saveFilters(req, res) {
   try {
     const companyId = req.user?.company_id;

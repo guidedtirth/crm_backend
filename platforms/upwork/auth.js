@@ -14,7 +14,7 @@ function requireCreds(keys) {
 }
 
 async function writeEnv(updates) {
-  const envPath = path.resolve(__dirname, '.env');
+  const envPath = path.resolve(__dirname, '../../.env');
   let content = '';
   try { content = await fs.readFile(envPath, 'utf8'); } catch (_) { content = ''; }
   const setLine = (c, key, value) => {
