@@ -5,9 +5,9 @@
   "scripts": {
     "start": "node index.js",
     "dev": "nodemon index.js",
-    "upwork:serve": "node upworkAuth.js --serve",
     "upwork:refresh": "node upworkAuth.js --refresh",
-    "upwork:url": "node upworkAuth.js --print-url",
+    "upwork:url": "node upworkAuth.js --auth-url",
+    "upwork:exchange": "node upworkAuth.js --exchange",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
@@ -25,10 +25,12 @@
     "jsonwebtoken": "^9.0.2",
     "multer": "^2.0.0",
     "node-cron": "^4.0.7",
-    "nodemon": "^3.1.10",
     "openai": "^5.10.1",
     "pdf-parse": "^1.1.1",
     "pg": "^8.16.0",
     "uuid": "^11.1.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.10"
   }
 }
