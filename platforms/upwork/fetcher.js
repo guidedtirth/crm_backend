@@ -719,9 +719,8 @@ async function assessAndMaybeGenerate(job, companyId, profileId) {
   const title = job?.title || job?.content?.title || job?.job?.content?.title || 'Unknown Title';
   const description = job?.description || job?.content?.description || job?.job?.content?.description || '';
   const skills = Array.isArray(job?.skills) ? job.skills.map(s => s.name || s.prettyName || '').filter(Boolean) : [];
-  // Create a fresh assistant thread per job evaluation (do not reuse)
-  const newThread = await openai.beta.threads.create();
-  const threadId = newThread.id;
+  // Reuse the user's existing chat thread so the assistant knows the user context
+  const threadId = await ensureProfileThread(profileId);
 
   // Serialize full job payload (prefer nested raw.job if present)
   const jobPayload = job?.job ? job.job : job;
@@ -749,7 +748,7 @@ async function assessAndMaybeGenerate(job, companyId, profileId) {
   const text = messages.data[0]?.content?.[0]?.text?.value || '';
   const parsed = extractJson(text) || {};
   const score = Number(parsed.score || parsed.compatibility || 0);
-  const suitable = parsed.suitable === true || score >= 80;
+  const suitable = (parsed.suitable === true) && (score >= 80);
   const proposal = String(parsed.proposal || '').trim();
   return { suitable, score: Math.floor(score), proposal, threadId };
 }
@@ -796,9 +795,17 @@ async function processNewJobs(jobs) {
             if (!suitable || score < 80 || !proposal) continue;
 
             const feedbackId = uuidv4();
+            // Create a fresh thread for the saved proposal (refinement thread)
+            let saveThreadId = null;
+            try {
+              const t = await openai.beta.threads.create();
+              saveThreadId = t.id;
+              // Seed the new thread with the generated proposal text for future refinements
+              await openai.beta.threads.messages.create(saveThreadId, { role: 'assistant', content: proposal });
+            } catch (_) { saveThreadId = threadId; }
             await db.query(
               'INSERT INTO proposal_feedback (id, profile_id, job_id, query_text, feedback, proposal, thread_id, score, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW())',
-              [feedbackId, profileId, externalJobId, JSON.stringify({ id: externalJobId, title: (jobNode.title || jobNode?.content?.title || '') }), null, proposal, threadId, score]
+              [feedbackId, profileId, externalJobId, JSON.stringify({ id: externalJobId, title: (jobNode.title || jobNode?.content?.title || '') }), null, proposal, saveThreadId, score]
             );
             // Optional: flag job as having at least one proposal
             try { await db.query('UPDATE upwork_jobs SET proposal_generated = TRUE WHERE job_id = $1', [externalJobId]); } catch {}
