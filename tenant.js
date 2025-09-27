@@ -12,6 +12,7 @@ async function ensureTenantSchema() {
   // Companies auth fields
   try { await db.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS email TEXT'); } catch (_) {}
   try { await db.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS password TEXT'); } catch (_) {}
+  try { await db.query('CREATE UNIQUE INDEX IF NOT EXISTS uq_companies_email ON companies(email)'); } catch (_) {}
   try { await db.query('CREATE UNIQUE INDEX IF NOT EXISTS uq_companies_name_email ON companies(name, email)'); } catch (_) {}
 
   // Profiles.company_id

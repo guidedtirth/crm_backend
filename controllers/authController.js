@@ -41,27 +41,24 @@ exports.signup = async (req, res) => {
     }
 };
 
-/** Login for an existing company (email/password on companies row) */
+/** Login for an existing company using only email/password */
 exports.login = async (req, res) => {
-    const { companyName, email, password } = req.body || {};
+    const { email, password } = req.body || {};
     try {
-        if (!companyName || !email || !password) {
-            return res.status(400).json({ message: 'companyName, email and password are required' });
+        if (!email || !password) {
+            return res.status(400).json({ message: 'email and password are required' });
         }
-        const company = await pool.query('SELECT id, email, password FROM companies WHERE name = $1', [companyName]);
+        const company = await pool.query('SELECT id, name, email, password FROM companies WHERE email = $1 LIMIT 1', [email]);
         if (company.rows.length === 0) {
-            return res.status(404).json({ status: 404, message: 'Company not found' });
+            return res.status(404).json({ status: 404, message: 'Invalid email or password' });
         }
         const row = company.rows[0];
-        if (!row.email || !row.password || row.email !== email) {
-            return res.status(404).json({ status: 404, message: 'Login not configured for this company or wrong email' });
-        }
-        const isMatch = await bcrypt.compare(password, row.password);
+        const isMatch = await bcrypt.compare(password, row.password || '');
         if (!isMatch) {
-            return res.status(402).json({ status: 402, message: 'Invalid password' });
+            return res.status(402).json({ status: 402, message: 'Invalid email or password' });
         }
         const token = jwt.sign({ id: row.id, company_id: row.id }, process.env.JWT_SECRET || 'your_jwt_secret');
-        res.status(200).json({ message: 'Login successful', token, company_id: row.id, data: { company_id: row.id, company_name: companyName, email } });
+        res.status(200).json({ message: 'Login successful', token, company_id: row.id, data: { company_id: row.id, company_name: row.name, email: row.email } });
     } catch (error) {
         res.status(500).json({ message: 'Login failed', error: error.message });
     }

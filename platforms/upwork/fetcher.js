@@ -371,10 +371,9 @@ async function fetchLatestJobs() {
       try {
         const budget = job.amount ? `${job.amount.currency} ${job.amount.rawValue}` : 'Unknown';
 
-        // Normalize job for stable schema regardless of GraphQL selection
+        // Use the raw node exactly as returned by Upwork (no normalization)
         const rawNode = job;
-    // Store the complete nested job object when present; fallback to the node
-    const jobDataToStore = rawNode?.job ? rawNode.job : rawNode;
+        const jobDataToStore = rawNode; // store raw
         const jobIdToStore = rawNode?.id || rawNode?.job?.id || null;
         const titleToStore = rawNode?.title || rawNode?.job?.content?.title || 'Unknown Title';
 
