@@ -708,6 +708,17 @@ async function assessAndMaybeGenerate(job, companyId, profileId) {
   // Reuse the user's existing chat thread so the assistant knows the user context
   const threadId = await ensureProfileThread(profileId);
 
+  // Fetch profile name and content for strict suitability checks
+  let profileName = 'Contributor';
+  let profileContent = '';
+  try {
+    const r = await db.query('SELECT name, content FROM profiles WHERE id = $1 LIMIT 1', [profileId]);
+    if (r.rows.length > 0) {
+      if (r.rows[0].name) profileName = String(r.rows[0].name);
+      if (typeof r.rows[0].content === 'string') profileContent = r.rows[0].content;
+    }
+  } catch {}
+
   // Serialize full job payload (prefer nested raw.job if present)
   const jobPayload = job?.job ? job.job : job;
   let jobJson = '';
@@ -716,10 +727,29 @@ async function assessAndMaybeGenerate(job, companyId, profileId) {
   if (jobJson.length > 60000) jobJson = jobJson.slice(0, 60000) + '\n/* truncated */';
 
   const prompt = [
-    `You are an assistant evaluating job-to-user fit and writing proposals.`,
-    `Use ONLY the job title and the JSON job object provided below (plus any prior thread context).`,
-    `Return STRICT JSON with keys: score (0-100), suitable (true/false), proposal (string).`,
-    `If suitable >= 80, include a concise, tailored plain-text proposal (no markdown).`,
+    `Evaluate fit strictly. Use ONLY the Profile text and Job JSON below.`,
+    `Return JSON: { score:0-100, suitable:true|false, proposal:string }`,
+    `Analysis order: 1) JOB: extract concrete requirements, stack, domain, and level. 2) PROFILE: extract demonstrated experience and outcomes from profile text (no guessing). 3) MATCHING: compare JOB vs PROFILE and reason about correspondences.`,
+    `Rules: default suitable=false. Set true ONLY if: (1) ≥3 strong, concrete correspondences between the profile’s demonstrated experience and the job’s stated requirements (responsibilities, tools/tech, domain, outcomes); (2) domain/stack clearly matches; (3) experience level aligns. If unsure, keep false. Do not infer capabilities beyond the provided profile text.`,
+    `Scoring: suitable=false => score<=60. Only score>=80 with strong, explicit evidence.`,
+    `Proposal: generate proposal text ONLY when suitable=true AND score>=80; otherwise proposal='' (empty). If eligible, use this exact plain-text format:`,
+    `--- PROPOSAL_FORMAT START ---`,
+    `Hi,`,
+    `One short sentence connecting my background to the role.`,
+    `RELEVANT EXPERIENCE:`,
+    `1. Point one (concise, to the point)`,
+    `2. Point two`,
+    `APPROACH:`,
+    `1. Step one`,
+    `2. Step two`,
+    `ESTIMATE & NEXT STEPS:`,
+    `- Timeline and suggestion to schedule a call`,
+    `Best regards,`,
+    `${profileName}`,
+    `--- PROPOSAL_FORMAT END ---`,
+    `PROFILE_TEXT_START`,
+    String(profileContent || '').slice(0, 8000),
+    `PROFILE_TEXT_END`,
     `JOB_TITLE: ${title}`,
     `JOB_JSON_START`,
     jobJson,

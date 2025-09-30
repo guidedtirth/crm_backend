@@ -40,7 +40,21 @@ async function generateAssistantProposal({ profileContent, queryText, budgetMin,
     `Job: ${queryText}`,
     `Budget Range: $${budgetMin}-${budgetMax}`,
     feedback ? `Feedback: ${feedback}` : null,
-    'Generate a job proposal in plain text format, tailored to the candidate\'s profile. Do not use any markdown symbols (e.g., #, *, **, -, >). Incorporate all feedback provided in the conversation history to improve the proposal, ensuring all suggestions are addressed.'
+    'Follow the exact proposal format below (plain text, no markdown):',
+    '--- PROPOSAL_FORMAT START ---',
+    'Hi,',
+    'One short sentence connecting my background to the role.',
+    'RELEVANT EXPERIENCE:',
+    '1. Point one (concise, to the point)',
+    '2. Point two',
+    'APPROACH:',
+    '1. Step one',
+    '2. Step two',
+    'ESTIMATE & NEXT STEPS:',
+    '- Timeline and suggestion to schedule a call',
+    'Best regards,',
+    '{{PROFILE_NAME}}',
+    '--- PROPOSAL_FORMAT END ---'
   ].filter(Boolean).join('\n');
 
   let thread;
@@ -143,7 +157,7 @@ module.exports = {
         if (profileRes.rows.length === 0) {
           return res.json({ result: [{ relevance: 'No', score: 0, proposal: 'Profile not found.', thread_id: threadId, created_at: nowIso }] });
         }
-        const profileName = profileRes.rows[0].name;
+      const profileName = profileRes.rows[0].name;
         const profileContent = profileRes.rows[0].content || '';
 
         const { proposal, threadId: ensuredThreadId } = await generateAssistantProposal({
@@ -236,7 +250,7 @@ module.exports = {
       if (profRes.rows.length === 0) {
         return res.json({ result: [{ relevance: 'No', score: 0, proposal: 'Profile not found.', thread_id: null, created_at: nowIso }] });
       }
-      const profileName = profRes.rows[0].name;
+        const profileName = profRes.rows[0].name;
       const profileContent = (profRes.rows[0].content || '') + (relevantChunks.length ? ('\n\n' + relevantChunks.join('\n')) : '');
 
       const { proposal, threadId: newThreadId } = await generateAssistantProposal({
