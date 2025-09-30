@@ -16,7 +16,7 @@ exports.createProfile = async (req, res) => {
     const { name } = req.body;
     const companyId = req.user?.company_id;
     if (!companyId) return res.status(401).json({ error: 'Missing company scope' });
-    const result = await pool.query("INSERT INTO profiles (name, company_id) VALUES ($1, $2) RETURNING *", [name, companyId]);
+    const result = await pool.query("INSERT INTO profiles (name, company_id, trainable_profile) VALUES ($1, $2, FALSE) RETURNING *", [name, companyId]);
 
     res.json(result.rows[0]);
   } catch (err) {

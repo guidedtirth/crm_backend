@@ -750,8 +750,11 @@ async function processNewJobs(jobs) {
       const companyId = c.company_id;
       const { companyFilter, profileFilters } = await loadActiveFiltersByCompany(companyId);
       const profRows = await db.query('SELECT id, name FROM profiles WHERE company_id = $1', [companyId]);
+      // Gate: only process profiles explicitly marked as trainable
+      const trainable = new Set((await db.query('SELECT id FROM profiles WHERE company_id = $1 AND trainable_profile = TRUE', [companyId])).rows.map(r => String(r.id)));
       for (const pr of profRows.rows) {
         const profileId = String(pr.id);
+        if (!trainable.has(profileId)) continue;
         const hasProfile = profileFilters.has(profileId);
         const filter = profileFilters.get(profileId) || companyFilter || null; // pass-all if none configured
         const filterScope = hasProfile ? 'profile' : (companyFilter ? 'company' : 'none');
@@ -819,8 +822,9 @@ async function runJobPipeline() {
   try {
     await ensureAssistantReady();
     const jobs = await fetchLatestJobs();
-    const processedCount = await processNewJobs(jobs);
-    pipelineLog('pipeline.done', { fetched: jobs.length, processed: processedCount });
+    // DB-only processing mode: we no longer process the freshly fetched batch here.
+    // The continuous full-DB loop (processJobsForAllCompanies) will pick these up.
+    pipelineLog('pipeline.done', { fetched: jobs.length, processed: 0 });
   } catch (err) {
     console.error('Pipeline failed:', err.message);
   } finally {
