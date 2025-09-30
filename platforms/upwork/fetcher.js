@@ -381,8 +381,8 @@ async function fetchLatestJobs() {
         let insertResult;
         try {
           insertResult = await db.query(
-            `INSERT INTO upwork_jobs (job_id, title, job_data, inserted_at, proposal_generated, client_country, budget)
-             VALUES ($1, $2, $3, NOW(), FALSE, $4, $5)
+            `INSERT INTO upwork_jobs (job_id, title, job_data, inserted_at, client_country, budget)
+             VALUES ($1, $2, $3, NOW(), $4, $5)
              ON CONFLICT (job_id) DO NOTHING
              RETURNING id`,
             [ jobIdToStore, titleToStore, JSON.stringify(jobDataToStore), rawNode?.client?.location?.country || null, budget ]
@@ -390,8 +390,8 @@ async function fetchLatestJobs() {
         } catch (colErr) {
           console.warn('Extended columns missing; using basic insert:', colErr.message);
           insertResult = await db.query(
-            `INSERT INTO upwork_jobs (job_id, title, job_data, inserted_at, proposal_generated)
-             VALUES ($1, $2, $3, NOW(), FALSE)
+            `INSERT INTO upwork_jobs (job_id, title, job_data, inserted_at)
+             VALUES ($1, $2, $3, NOW())
              ON CONFLICT (job_id) DO NOTHING
              RETURNING id`,
             [jobIdToStore, titleToStore, JSON.stringify(jobDataToStore)]
@@ -511,23 +511,10 @@ async function generateProposal(job, job_id) {
     const feedbackId = uuidv4();
     // Deduplicate by job_id (store external Upwork job_id)
     if (job_id_final) {
-      try {
-        const exists = await db.query('SELECT 1 FROM proposal_feedback WHERE job_id = $1 LIMIT 1', [job_id_final]);
-        if (exists.rowCount > 0) {
-          await db.query('UPDATE upwork_jobs SET proposal_generated = TRUE WHERE job_id = $1', [job_id_final]);
-        } else {
-          await db.query(
-            'INSERT INTO proposal_feedback (id, profile_id, job_id, query_text, feedback, proposal, thread_id, score, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())',
-            [feedbackId, bestProfileId, job_id_final, JSON.stringify({ id: job_id_final, title }), null, proposal, thread.id, Math.floor(highestScore * 100)]
-          );
-        }
-      } catch (dupErr) {
-        console.warn('proposal_feedback dedup check failed:', dupErr.message);
-        await db.query(
-          'INSERT INTO proposal_feedback (id, profile_id, job_id, query_text, feedback, proposal, thread_id, score, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())',
-          [feedbackId, bestProfileId, job_id_final, JSON.stringify({ id: job_id_final, title }), null, proposal, thread.id, Math.floor(highestScore * 100)]
-        );
-      }
+      await db.query(
+        'INSERT INTO proposal_feedback (id, profile_id, job_id, query_text, feedback, proposal, thread_id, score, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())',
+        [feedbackId, bestProfileId, job_id_final, JSON.stringify({ id: job_id_final, title }), null, proposal, thread.id, Math.floor(highestScore * 100)]
+      );
     } else {
       await db.query(
         'INSERT INTO proposal_feedback (id, profile_id, job_id, query_text, feedback, proposal, thread_id, score, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())',
@@ -806,8 +793,6 @@ async function processNewJobs(jobs) {
               'INSERT INTO proposal_feedback (id, profile_id, job_id, query_text, feedback, proposal, thread_id, score, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW())',
               [feedbackId, profileId, externalJobId, JSON.stringify({ id: externalJobId, title: (jobNode.title || jobNode?.content?.title || '') }), null, proposal, saveThreadId, score]
             );
-            // Optional: flag job as having at least one proposal
-            try { await db.query('UPDATE upwork_jobs SET proposal_generated = TRUE WHERE job_id = $1', [externalJobId]); } catch {}
             generated++;
             pipelineLog('score', { companyId, profileId, jobId: externalJobId, score, suitable: true, saved: true });
           } catch (e) {
@@ -843,6 +828,74 @@ async function runJobPipeline() {
   }
 }
 
+// ---------------- Full-DB continuous pipeline (newest-first, all jobs) ----------------
+async function fetchStoredJobsPage(limit, offset) {
+  const res = await db.query('SELECT job_id, job_data FROM upwork_jobs ORDER BY inserted_at DESC OFFSET $1 LIMIT $2', [offset, limit]);
+  return res.rows.map(r => ({ job_id: r.job_id, node: r.job_data }));
+}
+
+async function loadAllCompanyIds() {
+  const res = await db.query('SELECT DISTINCT company_id FROM profiles WHERE company_id IS NOT NULL');
+  return res.rows.map(r => String(r.company_id));
+}
+
+async function loadProfilesByCompany(companyId) {
+  const res = await db.query('SELECT id, name FROM profiles WHERE company_id = $1', [companyId]);
+  return res.rows.map(r => ({ id: String(r.id), name: r.name }));
+}
+
+async function processJobsForAllCompanies(jobs) {
+  const companies = await loadAllCompanyIds();
+  for (const companyId of companies) {
+    const { companyFilter, profileFilters } = await loadActiveFiltersByCompany(companyId);
+    const profiles = await loadProfilesByCompany(companyId);
+    // Only process profiles that opted-in via trainable_profile = TRUE
+    const trainable = new Set((await db.query('SELECT id FROM profiles WHERE company_id = $1 AND trainable_profile = TRUE', [companyId])).rows.map(r => String(r.id)));
+    for (const profile of profiles) {
+      if (!trainable.has(profile.id)) continue;
+      const filter = profileFilters.get(profile.id) || companyFilter || null;
+      for (const job of jobs) {
+        const exists = await db.query('SELECT 1 FROM proposal_feedback WHERE job_id = $1 AND profile_id = $2 LIMIT 1', [job.job_id, profile.id]);
+        if (exists.rowCount > 0) continue;
+        const node = job.node || null;
+        if (!node) continue;
+        if (!jobMatchesFilter(node, filter)) continue;
+        try {
+          const { suitable, score, proposal, threadId } = await assessAndMaybeGenerate(node, companyId, profile.id);
+          if (!suitable || score < 80 || !proposal) continue;
+          const feedbackId = uuidv4();
+          await db.query(
+            'INSERT INTO proposal_feedback (id, profile_id, job_id, query_text, feedback, proposal, thread_id, score, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW())',
+            [feedbackId, profile.id, job.job_id, JSON.stringify({ id: job.job_id }), null, proposal, threadId, score]
+          );
+          pipelineLog('score.fullscan', { companyId, profileId: profile.id, jobId: job.job_id, score, suitable: true, saved: true });
+        } catch (e) {
+          console.warn(`fullscan ${profile.id} job ${job.job_id} generation failed: ${e.message}`);
+        }
+      }
+    }
+  }
+}
+
+async function runFullDbPipelineContinuously() {
+  const pageSize = Number(process.env.PIPELINE_DB_PAGE_SIZE || 500);
+  const idleMs = Number(process.env.PIPELINE_IDLE_MS_BETWEEN_FULL_SCANS || 60000);
+  for (;;) {
+    try {
+      let offset = 0;
+      for (;;) {
+        const page = await fetchStoredJobsPage(pageSize, offset);
+        if (!page.length) break;
+        await processJobsForAllCompanies(page);
+        offset += page.length;
+      }
+    } catch (e) {
+      console.error('Full-DB pipeline cycle failed:', e.message);
+    }
+    await new Promise(r => setTimeout(r, idleMs));
+  }
+}
+
 async function startApplication() {
   try {
 
@@ -852,8 +905,11 @@ async function startApplication() {
     // Initial run
     await runJobPipeline();
 
-    // Schedule regular runs
+    // Schedule regular runs (new jobs)
     cron.schedule('*/5 * * * *', () => { runJobPipeline().catch(console.error); });
+
+    // Start full-DB continuous pipeline alongside cron
+    runFullDbPipelineContinuously().catch(console.error);
   } catch (startupError) {
     console.error('Startup failed:', startupError.message);
     process.exit(1);

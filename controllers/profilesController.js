@@ -104,10 +104,32 @@ exports.allowTrainProfile = async (req, res) => {
 
     const companyId = req.user?.company_id;
     if (!companyId) return res.status(401).json({ error: 'Missing company scope' });
-    // Update profile to allow training
+    // Update profile to disallow training
     await pool.query("UPDATE profiles SET trainable_profile = FALSE WHERE id = $1 AND company_id = $2", [profileId, companyId]);
     
     res.json({ message: "Profile training enabled successfully" });
+  } catch (err) {
+    console.error("Enable training error:", err.message);
+    res.status(500).json({ error: "Server Error", details: err.message });
+  }
+};
+
+/** Explicitly enable training for a profile (opt-in) */
+exports.enableTrainProfile = async (req, res) => {
+  try {
+    const { profileId } = req.params;
+
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!uuidRegex.test(profileId)) {
+      return res.status(400).json({ error: 'Invalid profileId format' });
+    }
+
+    const companyId = req.user?.company_id;
+    if (!companyId) return res.status(401).json({ error: 'Missing company scope' });
+
+    await pool.query("UPDATE profiles SET trainable_profile = TRUE WHERE id = $1 AND company_id = $2", [profileId, companyId]);
+
+    res.json({ message: "Profile training enabled" });
   } catch (err) {
     console.error("Enable training error:", err.message);
     res.status(500).json({ error: "Server Error", details: err.message });

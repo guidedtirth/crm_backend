@@ -18,6 +18,8 @@ async function ensureTenantSchema() {
   // Profiles.company_id
   try { await db.query('ALTER TABLE profiles ADD COLUMN IF NOT EXISTS company_id UUID'); } catch (_) {}
   try { await db.query('CREATE INDEX IF NOT EXISTS idx_profiles_company ON profiles(company_id)'); } catch (_) {}
+  // Profiles.trainable_profile flag (default false)
+  try { await db.query("ALTER TABLE profiles ADD COLUMN IF NOT EXISTS trainable_profile BOOLEAN DEFAULT FALSE"); } catch (_) {}
   // Profiles auth fields
   try { await db.query('ALTER TABLE profiles ADD COLUMN IF NOT EXISTS email TEXT'); } catch (_) {}
   try { await db.query('ALTER TABLE profiles ADD COLUMN IF NOT EXISTS password TEXT'); } catch (_) {}
@@ -30,8 +32,7 @@ async function ensureTenantSchema() {
       job_id TEXT UNIQUE,
       title TEXT,
       job_data JSONB,
-      inserted_at TIMESTAMPTZ DEFAULT NOW(),
-      proposal_generated BOOLEAN DEFAULT FALSE
+      inserted_at TIMESTAMPTZ DEFAULT NOW()
     );
   `);
   try { await db.query('CREATE UNIQUE INDEX IF NOT EXISTS uq_upwork_jobs_job_id ON upwork_jobs(job_id)'); } catch (_) {}
@@ -52,6 +53,9 @@ async function ensureTenantSchema() {
   try { await db.query('CREATE UNIQUE INDEX IF NOT EXISTS uq_job_filters_profile ON job_filters(platform, company_id, profile_id)'); } catch (_) {}
   // Helpful index
   try { await db.query('CREATE INDEX IF NOT EXISTS idx_job_filters_company_profile_active ON job_filters(company_id, profile_id, active)'); } catch (_) {}
+
+  // Ensure proposal_feedback unique assignment per (job_id, profile_id)
+  try { await db.query('CREATE UNIQUE INDEX IF NOT EXISTS uq_proposal_feedback_job_profile ON proposal_feedback(job_id, profile_id)'); } catch (_) {}
 }
 
 module.exports = { ensureTenantSchema };

@@ -16,7 +16,7 @@ Node/Express service with a 5‑minute incremental Upwork job fetcher and per‑
 
 ## Data Model (core)
 
-- `upwork_jobs(job_id UNIQUE, title, job_data JSONB, proposal_generated BOOLEAN)`
+- `upwork_jobs(job_id UNIQUE, title, job_data JSONB)`
 - `profiles(id, company_id, name, content, training_file, last_updated, assistant_id)`
 - `job_filters(platform='upwork', company_id, profile_id NULLABLE, active, category_ids, workload, verified_payment_only, client_hires_min/max, hourly_rate_min/max, budget_min/max, proposal_min/max, experience_level)`
 - `proposal_feedback(id, profile_id, job_id, proposal, thread_id, score, created_at)`

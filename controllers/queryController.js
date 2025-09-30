@@ -169,15 +169,10 @@ module.exports = {
 
         const feedbackId = uuidv4();
         if (jobIdFromBody) {
-          const exists = await pool.query('SELECT 1 FROM proposal_feedback WHERE job_id = $1 LIMIT 1', [jobIdFromBody]);
-          if (exists.rowCount > 0) {
-            await pool.query('UPDATE upwork_jobs SET proposal_generated = TRUE WHERE job_id = $1', [jobIdFromBody]);
-          } else {
-            await pool.query(
-              'INSERT INTO proposal_feedback (id, profile_id, job_id, query_text, feedback, proposal, thread_id, score, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())',
-              [feedbackId, profileIdFromBody, jobIdFromBody, JSON.stringify({ id: jobIdFromBody, title }), feedback, proposal, ensuredThreadId, scoreToPersist]
-            );
-          }
+          await pool.query(
+            'INSERT INTO proposal_feedback (id, profile_id, job_id, query_text, feedback, proposal, thread_id, score, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())',
+            [feedbackId, profileIdFromBody, jobIdFromBody, JSON.stringify({ id: jobIdFromBody, title }), feedback, proposal, ensuredThreadId, scoreToPersist]
+          );
         } else {
           await pool.query(
             'INSERT INTO proposal_feedback (id, profile_id, job_id, query_text, feedback, proposal, thread_id, score, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())',
@@ -256,15 +251,10 @@ module.exports = {
 
       const feedbackId = uuidv4();
       if (jobIdFromBody) {
-        const exists = await pool.query('SELECT 1 FROM proposal_feedback WHERE job_id = $1 LIMIT 1', [jobIdFromBody]);
-        if (exists.rowCount > 0) {
-          await pool.query('UPDATE upwork_jobs SET proposal_generated = TRUE WHERE job_id = $1', [jobIdFromBody]);
-        } else {
-          await pool.query(
-            'INSERT INTO proposal_feedback (id, profile_id, job_id, query_text, feedback, proposal, thread_id, score, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())',
-            [feedbackId, bestProfileId, jobIdFromBody, JSON.stringify({ id: jobIdFromBody, title }), null, proposal, newThreadId, Math.floor(highestScore * 100)]
-          );
-        }
+        await pool.query(
+          'INSERT INTO proposal_feedback (id, profile_id, job_id, query_text, feedback, proposal, thread_id, score, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())',
+          [feedbackId, bestProfileId, jobIdFromBody, JSON.stringify({ id: jobIdFromBody, title }), null, proposal, newThreadId, Math.floor(highestScore * 100)]
+        );
       } else {
         await pool.query(
           'INSERT INTO proposal_feedback (id, profile_id, job_id, query_text, feedback, proposal, thread_id, score, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())',
