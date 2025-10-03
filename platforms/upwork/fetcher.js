@@ -11,6 +11,7 @@ const cron = require('node-cron');
 const { getAssistantId, initializeAssistant } = require('../../assistant');
 const db = require('../../db');
 const OpenAI = require('openai');
+const { canonicalizeJobNode, summarizeJobForPrompt } = require('./utils');
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -21,6 +22,26 @@ function pipelineLog(event, data) {
 
 // Load environment variables
 dotenv.config();
+
+// -------------------- Global assistant throttling (sequential + 1 min gap) --------------------
+const MIN_REQUEST_GAP_MS = Number(process.env.PIPELINE_MIN_GAP_MS || 60000);
+let lastAssistantCompletionAt = 0;
+let assistantQueue = Promise.resolve();
+function sleep(ms){ return new Promise(r => setTimeout(r, ms)); }
+async function scheduleAssistantTask(taskName, fn) {
+  assistantQueue = assistantQueue.then(async () => {
+    const now = Date.now();
+    const waitMs = Math.max(0, lastAssistantCompletionAt + MIN_REQUEST_GAP_MS - now);
+    if (waitMs > 0) {
+      try { console.log(JSON.stringify({ ts: new Date().toISOString(), event: 'throttle.wait', taskName, waitMs })); } catch {}
+      await sleep(waitMs);
+    }
+    const result = await fn();
+    lastAssistantCompletionAt = Date.now();
+    return result;
+  });
+  return assistantQueue;
+}
 
 
 
@@ -371,11 +392,11 @@ async function fetchLatestJobs() {
       try {
         const budget = job.amount ? `${job.amount.currency} ${job.amount.rawValue}` : 'Unknown';
 
-        // Use the raw node exactly as returned by Upwork (no normalization)
+        // Canonicalize before storage for one consistent structure
         const rawNode = job;
-        const jobDataToStore = rawNode; // store raw
-        const jobIdToStore = rawNode?.id || rawNode?.job?.id || null;
-        const titleToStore = rawNode?.title || rawNode?.job?.content?.title || 'Unknown Title';
+        const jobDataToStore = canonicalizeJobNode(rawNode);
+        const jobIdToStore = jobDataToStore.id;
+        const titleToStore = jobDataToStore.title || 'Unknown Title';
 
         // DB insert with normalized job_data; fallback if extended columns missing
         let insertResult;
@@ -591,6 +612,8 @@ function jobMatchesFilter(job, f) {
   }
 }
 
+// Job summarizer is imported from './utils'
+
 async function loadActiveFiltersByCompany(companyId) {
   const rows = await db.query(
     `SELECT profile_id, active, category_ids, workload, verified_payment_only,
@@ -685,83 +708,135 @@ async function pollRunLocal(threadId, runId) {
     attempts += 1;
     await new Promise(r => setTimeout(r, 800));
     const apiUrl = `https://api.openai.com/v1/threads/${threadId}/runs/${runId}`;
-    const resp = await axios.get(apiUrl, {
-      headers: {
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-        'Content-Type': 'application/json',
-        'OpenAI-Beta': 'assistants=v2'
-      },
-      timeout: 15000
-    });
-    run = resp.data;
+    try {
+      const resp = await axios.get(apiUrl, {
+        headers: {
+          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+          'Content-Type': 'application/json',
+          'OpenAI-Beta': 'assistants=v2'
+        },
+        timeout: 45000
+      });
+      run = resp.data;
+    } catch (err) {
+      const status = err?.response?.status;
+      const isTimeout = String(err?.message || '').toLowerCase().includes('timeout') || err?.code === 'ECONNABORTED';
+      // Tolerate transient timeouts/5xx/429 by continuing the loop
+      if (isTimeout || !status || status === 408 || status === 429 || status === 500 || status === 502 || status === 503 || status === 504) {
+        if (attempts > 60) throw new Error('Polling timeout');
+        continue;
+      }
+      throw err;
+    }
     if (['failed','cancelled','expired'].includes(run.status)) {
       throw new Error(`Assistant run ${run.status}: ${run.last_error?.message || 'unknown'}`);
     }
-    if (attempts > 40) throw new Error('Polling timeout');
+    if (attempts > 120) throw new Error('Polling timeout');
   }
+}
+
+// If a run is already active on a thread, wait for it to finish (best-effort)
+async function waitForActiveRunIfAny(threadId) {
+  try {
+    const runs = await openai.beta.threads.runs.list(threadId, { limit: 1, order: 'desc' });
+    const latest = runs?.data?.[0];
+    if (latest && (latest.status === 'queued' || latest.status === 'in_progress')) {
+      await pollRunLocal(threadId, latest.id);
+      return true;
+    }
+  } catch {}
+  return false;
 }
 
 async function assessAndMaybeGenerate(job, companyId, profileId) {
   const title = job?.title || job?.content?.title || job?.job?.content?.title || 'Unknown Title';
   const description = job?.description || job?.content?.description || job?.job?.content?.description || '';
   const skills = Array.isArray(job?.skills) ? job.skills.map(s => s.name || s.prettyName || '').filter(Boolean) : [];
+  const jobIdForThrottle = job?.id || job?.job?.id || job?.job_id || null;
   // Reuse the user's existing chat thread so the assistant knows the user context
   const threadId = await ensureProfileThread(profileId);
 
-  // Fetch profile name and content for strict suitability checks
-  let profileName = 'Contributor';
-  let profileContent = '';
+  // Use existing thread context to represent the candidate background; fetch display name only
+  let profileName = '';
   try {
-    const r = await db.query('SELECT name, content FROM profiles WHERE id = $1 LIMIT 1', [profileId]);
-    if (r.rows.length > 0) {
-      if (r.rows[0].name) profileName = String(r.rows[0].name);
-      if (typeof r.rows[0].content === 'string') profileContent = r.rows[0].content;
-    }
+    const r = await db.query('SELECT name FROM profiles WHERE id = $1 LIMIT 1', [profileId]);
+    if (r.rows.length > 0 && r.rows[0].name) profileName = String(r.rows[0].name);
   } catch {}
 
-  // Serialize full job payload (prefer nested raw.job if present)
-  const jobPayload = job?.job ? job.job : job;
+  // Build compact job summary to minimize tokens
   let jobJson = '';
-  try { jobJson = JSON.stringify(jobPayload); } catch { jobJson = JSON.stringify({ title, description, skills }); }
-  // Guardrail: cap extremely large payloads
-  if (jobJson.length > 60000) jobJson = jobJson.slice(0, 60000) + '\n/* truncated */';
+  try { jobJson = JSON.stringify(summarizeJobForPrompt(job)); } catch { jobJson = JSON.stringify({ title, description, skills }); }
 
   const prompt = [
-    `Evaluate fit strictly. Use ONLY the Profile text and Job JSON below.`,
-    `Return JSON: { score:0-100, suitable:true|false, proposal:string }`,
-    `Analysis order: 1) JOB: extract concrete requirements, stack, domain, and level. 2) PROFILE: extract demonstrated experience and outcomes from profile text (no guessing). 3) MATCHING: compare JOB vs PROFILE and reason about correspondences.`,
-    `Rules: default suitable=false. Set true ONLY if: (1) ≥3 strong, concrete correspondences between the profile’s demonstrated experience and the job’s stated requirements (responsibilities, tools/tech, domain, outcomes); (2) domain/stack clearly matches; (3) experience level aligns. If unsure, keep false. Do not infer capabilities beyond the provided profile text.`,
-    `Scoring: suitable=false => score<=60. Only score>=80 with strong, explicit evidence.`,
-    `Proposal: generate proposal text ONLY when suitable=true AND score>=80; otherwise proposal='' (empty). If eligible, use this exact plain-text format:`,
+    `Using the assistant thread as the user's background, check how well the user fits the job below. Be simple and positive: focus on what the user knows from the thread, even if minimal, and see if it can work for the job with some learning.`,
+    `Scoring: 0-39 no fit, 40-79 some fit, 80-100 possible & good fit.`,
+    `Suitability: true if score >= 80 or user can likely handle the job.`,
+    `Proposal: Write a short, positive plain-text proposal if suitable=true and score >= 80; otherwise proposal='' (empty). Use this format:`,
     `--- PROPOSAL_FORMAT START ---`,
     `Hi,`,
-    `One short sentence connecting my background to the role.`,
+    `One sentence linking my skills to the job.`,
     `RELEVANT EXPERIENCE:`,
-    `1. Point one (concise, to the point)`,
-    `2. Point two`,
+    `1. Skill or experience one (short)`,
+    `2. Skill or experience two`,
     `APPROACH:`,
-    `1. Step one`,
-    `2. Step two`,
+    `1. How I’d start`,
+    `2. Next step`,
     `ESTIMATE & NEXT STEPS:`,
-    `- Timeline and suggestion to schedule a call`,
+    `- Timeline and suggestion to talk`,
     `Best regards,`,
     `${profileName}`,
     `--- PROPOSAL_FORMAT END ---`,
-    `PROFILE_TEXT_START`,
-    String(profileContent || '').slice(0, 8000),
-    `PROFILE_TEXT_END`,
     `JOB_TITLE: ${title}`,
-    `JOB_JSON_START`,
+    `JOB_SUMMARY_JSON_START`,
     jobJson,
-    `JOB_JSON_END`
+    `JOB_SUMMARY_JSON_END`
   ].join('\n');
-
-  await openai.beta.threads.messages.create(threadId, { role: 'user', content: prompt });
-  const assistantId = getAssistantId();
-  const run = await openai.beta.threads.runs.create(threadId, { assistant_id: assistantId });
-  await pollRunLocal(threadId, run.id);
-  const messages = await openai.beta.threads.messages.list(threadId, { limit: 1, order: 'desc' });
-  const text = messages.data[0]?.content?.[0]?.text?.value || '';
+console.log("threadId", threadId);
+  // The actual assistant call is managed by the global sequential throttle
+  const text = await scheduleAssistantTask(`profile:${profileId}|job:${jobIdForThrottle || 'na'}`, async () => {
+    // Post message with active-run handling
+    const maxMsgRetries = 2;
+    let msgPosted = false;
+    for (let attempt = 0; attempt <= maxMsgRetries && !msgPosted; attempt++) {
+      try {
+        await openai.beta.threads.messages.create(threadId, { role: 'user', content: prompt });
+        msgPosted = true;
+      } catch (err) {
+        const status = err?.response?.status;
+        const msg = String(err?.response?.data?.error?.message || err?.message || '');
+        const activeRun = status === 400 && /while a run.*is active/i.test(msg);
+        if (activeRun) {
+          await waitForActiveRunIfAny(threadId);
+          if (attempt === maxMsgRetries) throw err;
+          await new Promise(r => setTimeout(r, 800));
+          continue;
+        }
+        throw err;
+      }
+    }
+    const assistantId = getAssistantId();
+    // Create run (if a run just got triggered elsewhere, wait and retry once)
+    let run;
+    try {
+      run = await openai.beta.threads.runs.create(threadId, { assistant_id: assistantId });
+    } catch (err) {
+      const status = err?.response?.status;
+      const msg = String(err?.response?.data?.error?.message || err?.message || '');
+      const activeRun = status === 400 && /run.*is active/i.test(msg);
+      if (activeRun) {
+        await waitForActiveRunIfAny(threadId);
+        run = await openai.beta.threads.runs.create(threadId, { assistant_id: assistantId });
+      } else {
+        throw err;
+      }
+    }
+    await pollRunLocal(threadId, run.id);
+    const messages = await openai.beta.threads.messages.list(threadId, { limit: 1, order: 'desc' });
+    return messages.data[0]?.content?.[0]?.text?.value || '';
+  });
+  try {
+    console.log(JSON.stringify({ event: 'assistant.response', profileId, jobId: jobIdForThrottle || null, preview: String(text).slice(0, 300) }));
+  } catch {}
   const parsed = extractJson(text) || {};
   const score = Number(parsed.score || parsed.compatibility || 0);
   const suitable = (parsed.suitable === true) && (score >= 80);
@@ -833,6 +908,7 @@ async function processNewJobs(jobs) {
           }
         }
         pipelineLog('filter.used', { companyId, profileId, scope: filterScope, filteredCount: filteredJobIds.length, jobIds: filteredJobIds });
+        try { console.log(`PROFILE_FILTER_COUNT profile=${profileId} count=${filteredJobIds.length}`); } catch {}
       }
     }
     return generated;
@@ -888,13 +964,26 @@ async function processJobsForAllCompanies(jobs) {
     for (const profile of profiles) {
       if (!trainable.has(profile.id)) continue;
       const filter = profileFilters.get(profile.id) || companyFilter || null;
+
+      // First pass: collect filtered jobs, log count immediately
+      const filteredJobs = [];
       for (const job of jobs) {
         const exists = await db.query('SELECT 1 FROM proposal_feedback WHERE job_id = $1 AND profile_id = $2 LIMIT 1', [job.job_id, profile.id]);
         if (exists.rowCount > 0) continue;
         const node = job.node || null;
         if (!node) continue;
         if (!jobMatchesFilter(node, filter)) continue;
+        filteredJobs.push(job);
+      }
+      try {
+        console.log(JSON.stringify({ event: 'filter.count', companyId, profileId: profile.id, count: filteredJobs.length }));
+      } catch {}
+
+      // Second pass: process filtered jobs (throttle will serialize assistant calls)
+      for (const job of filteredJobs) {
+        const node = job.node;
         try {
+          try { console.log(JSON.stringify({ event: 'assistant.queue', companyId, profileId: profile.id, jobId: job.job_id })); } catch {}
           const { suitable, score, proposal, threadId } = await assessAndMaybeGenerate(node, companyId, profile.id);
           if (!suitable || score < 80 || !proposal) continue;
           const feedbackId = uuidv4();

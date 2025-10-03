@@ -1,0 +1,78 @@
+{
+  "total_jobs": 3470,
+  "companies": [
+    {
+      "company_id": "41ecdb60-5fc2-4960-9df6-a0892de36dd0",
+      "profiles": [
+        {
+          "profile_id": "57bfe6c2-52eb-4dcd-b844-ad6ed1f03a31",
+          "filter_scope": "profile",
+          "filter_used": {
+            "category_ids": [
+              "531770282580668418"
+            ],
+            "workload": [
+              "full_time"
+            ],
+            "verified_payment_only": true,
+            "client_hires_min": 1,
+            "client_hires_max": null,
+            "hourly_rate_min": "10",
+            "hourly_rate_max": "15",
+            "budget_min": null,
+            "budget_max": null,
+            "proposal_min": 5,
+            "proposal_max": 20,
+            "experience_level": null
+          },
+          "filtered_count": 8,
+          "job_ids": [
+            "1973904327128739494",
+            "1973955656657902574",
+            "1973959742400732142",
+            "1973280628717273844",
+            "1972878789243596552",
+            "1972900829305344659",
+            "1972902693239472464",
+            "1970456652085699744"
+          ]
+        },
+        {
+          "profile_id": "9e5c51ea-cead-4a20-90f6-5fbc7e00c363",
+          "filter_scope": "profile",
+          "filter_used": {
+            "category_ids": [
+              "531770282580668418"
+            ],
+            "workload": [],
+            "verified_payment_only": false,
+            "client_hires_min": null,
+            "client_hires_max": null,
+            "hourly_rate_min": null,
+            "hourly_rate_max": null,
+            "budget_min": "12",
+            "budget_max": "20",
+            "proposal_min": null,
+            "proposal_max": null,
+            "experience_level": null
+          },
+          "filtered_count": 12,
+          "job_ids": [
+            "1973948870142319862",
+            "1973949340747394727",
+            "1973967093090458606",
+            "1973361705439353573",
+            "1973321711190950644",
+            "1973275540862943988",
+            "1973272225055916788",
+            "1972997819223720272",
+            "1972998524380484243",
+            "1972943649201483528",
+            "1972886815564394248",
+            "1972897341871592083"
+          ]
+        }
+      ]
+    }
+  ]
+}

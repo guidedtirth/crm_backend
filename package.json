@@ -5,6 +5,7 @@
   "scripts": {
     "start": "node index.js",
     "dev": "nodemon index.js",
+    "jobs:normalize": "node tools/normalize_upwork_jobs.js",
     "upwork:refresh": "node upworkAuth.js --refresh",
     "upwork:url": "node upworkAuth.js --auth-url",
     "upwork:exchange": "node upworkAuth.js --exchange",

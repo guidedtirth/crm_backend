@@ -9,6 +9,7 @@ const { getAssistantId } = require('../assistant');
 const pool = require('../db');
 const pdfParse = require('pdf-parse');
 const OpenAI = require('openai');
+const { summarizeJobForPrompt } = require('../platforms/upwork/utils');
 const axios = require('axios'); // Added for raw HTTP call
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -34,27 +35,32 @@ function cosineSimilarity(a, b) {
  * Use Assistants API to generate a proposal, given text inputs.
  * Returns { proposal, threadId }.
  */
-async function generateAssistantProposal({ profileContent, queryText, budgetMin, budgetMax, threadId, assistantId, feedback }) {
+async function generateAssistantProposal({ profileContent, queryText, budgetMin, budgetMax, threadId, assistantId, feedback, profileName }) {
   const messageContent = [
-    `Profile: ${profileContent}`,
-    `Job: ${queryText}`,
+    `Evaluate fit strictly. Use ONLY the Profile text and Job Summary below.`,
+    `Return only the proposal text if it is a strong fit; otherwise return a very short explanation why not.`,
+    `PROFILE_START`,
+    String(profileContent || '').slice(0, 3000),
+    `PROFILE_END`,
+    `JOB_SUMMARY_START`,
+    queryText,
     `Budget Range: $${budgetMin}-${budgetMax}`,
     feedback ? `Feedback: ${feedback}` : null,
-    'Follow the exact proposal format below (plain text, no markdown):',
-    '--- PROPOSAL_FORMAT START ---',
-    'Hi,',
-    'One short sentence connecting my background to the role.',
-    'RELEVANT EXPERIENCE:',
-    '1. Point one (concise, to the point)',
-    '2. Point two',
-    'APPROACH:',
-    '1. Step one',
-    '2. Step two',
-    'ESTIMATE & NEXT STEPS:',
-    '- Timeline and suggestion to schedule a call',
-    'Best regards,',
-    '{{PROFILE_NAME}}',
-    '--- PROPOSAL_FORMAT END ---'
+    `JOB_SUMMARY_END`,
+    `FORMAT_START`,
+    `Hi,`,
+    `One short sentence connecting my background to the role.`,
+    `RELEVANT EXPERIENCE:`,
+    `1. Point one (concise, to the point)`,
+    `2. Point two`,
+    `APPROACH:`,
+    `1. Step one`,
+    `2. Step two`,
+    `ESTIMATE & NEXT STEPS:`,
+    `- Timeline and suggestion to schedule a call`,
+    `Best regards,`,
+    String(profileName || 'Candidate'),
+    `FORMAT_END`
   ].filter(Boolean).join('\n');
 
   let thread;
@@ -148,6 +154,8 @@ module.exports = {
       const profileIdFromBody = queryData.profile_id || null;
 
       const queryTextForEmbedding = `${typeof title === 'string' ? title : JSON.stringify(title)} ${description} ${skills.join(' ')}`.trim();
+      // Also build a compact job summary string for prompting (if full job object is provided later we can swap to summarizeJobForPrompt)
+      const jobSummaryString = JSON.stringify({ title, description: String(description).slice(0,700), skills: (skills || []).slice(0,8) });
 
       const nowIso = new Date().toISOString();
 
@@ -162,12 +170,13 @@ module.exports = {
 
         const { proposal, threadId: ensuredThreadId } = await generateAssistantProposal({
           profileContent,
-          queryText: queryTextForEmbedding,
+          queryText: jobSummaryString,
           budgetMin,
           budgetMax,
           threadId,
           assistantId,
-          feedback
+          feedback,
+          profileName
         });
 
         // Preserve the original match score for this thread so lists don't jump to 100%
@@ -255,12 +264,13 @@ module.exports = {
 
       const { proposal, threadId: newThreadId } = await generateAssistantProposal({
         profileContent,
-        queryText: queryTextForEmbedding,
+        queryText: jobSummaryString,
         budgetMin,
         budgetMax,
         threadId: null,
         assistantId,
-        feedback: null
+        feedback: null,
+        profileName
       });
 
       const feedbackId = uuidv4();
