@@ -16,7 +16,7 @@ exports.getProposalById = async (req, res) => {
                                         JOIN profiles p ON p.id = pf.profile_id
                                         WHERE pf.profile_id = $1
                                           AND p.company_id = $2
-                                          AND pf.score >= 80
+                                              AND pf.score >= 60
                                         `, [profile_id, companyId]);
 
         if (result.rows.length === 0) {
