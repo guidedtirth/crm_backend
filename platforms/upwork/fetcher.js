@@ -739,6 +739,42 @@ function extractJson(text) {
   try { return JSON.parse(m[0]); } catch { return null; }
 }
 
+function parseAssistantOutput(text) {
+  const result = { score: 0, suitable: false, proposal: '' };
+  if (!text) return result;
+  // Prefer JSON if present
+  const j = extractJson(text);
+  if (j) {
+    const scoreNum = Number(j.score || j.compatibility || 0);
+    result.score = Number.isFinite(scoreNum) ? Math.max(0, Math.min(100, Math.floor(scoreNum))) : 0;
+    result.suitable = j.suitable === true || String(j.suitable || '').toLowerCase() === 'true';
+    result.proposal = String(j.proposal || '').trim();
+    return result;
+  }
+  // Fallback: scrape plain text
+  const scoreM = text.match(/score\s*[:=]\s*(\d{1,3})/i);
+  if (scoreM) {
+    const s = parseInt(scoreM[1], 10);
+    if (Number.isFinite(s)) result.score = Math.max(0, Math.min(100, s));
+  }
+  const suitM = text.match(/suitability\s*[:=]\s*(true|false)/i);
+  if (suitM) result.suitable = String(suitM[1]).toLowerCase() === 'true';
+  // Extract proposal between markers if available
+  const startTag = '--- PROPOSAL_FORMAT START ---';
+  const endTag = '--- PROPOSAL_FORMAT END ---';
+  const startIdx = text.indexOf(startTag);
+  if (startIdx !== -1) {
+    const from = startIdx + startTag.length;
+    const endIdx = text.indexOf(endTag, from);
+    result.proposal = (endIdx !== -1 ? text.slice(from, endIdx) : text.slice(from)).trim();
+  } else {
+    // As a last resort, take the tail of the message after first double newline
+    const parts = text.split(/\n\n+/);
+    if (parts.length > 1) result.proposal = parts.slice(1).join('\n\n').trim();
+  }
+  return result;
+}
+
 async function pollRunLocal(threadId, runId) {
   let run = { id: runId, status: 'queued' };
   let attempts = 0;
@@ -806,11 +842,20 @@ async function assessAndMaybeGenerate(job, companyId, profileId) {
   try { jobJson = JSON.stringify(summarizeJobForPrompt(job)); } catch { jobJson = JSON.stringify({ title, description, skills }); }
 
   const prompt = [
-    `Using the assistant thread as the user's background, check how well the user fits the job below. Be simple and positive: focus on what the user knows from the thread, even if minimal, and see if it can work for the job with some learning.`,
-    `Scoring: 0-59 no fit, 60-100 some, possible & good fit.`,
-    `Suitability: true if score >= 60 or user can likely handle the job.`,
-    `Proposal: If score < 60, set proposal='' (empty). If score >= 60, write a short, positive plain-text proposal using this format:`,
-    `--- PROPOSAL_FORMAT START ---`,
+    // Output contract (strict JSON only)
+    `Return ONLY a single JSON object with EXACT keys: score (integer 0-100), suitable (boolean), proposal (string).`,
+    `Output JSON only. No explanations, no markdown, no code fences, no extra keys.`,
+    `Example: {"score":72,"suitable":true,"proposal":"Hi,\\n...\\nBest regards,\\n${profileName}"}`,
+    // Context & scoring rules
+    `Use the assistant thread as the candidate background. Be simple and positive; consider if the user can handle with some learning.`,
+    `Scoring: 0-59 no fit, 60-100 some/possible/good fit.`,
+    `suitable MUST be true iff score >= 60; otherwise false.`,
+    // Proposal formatting (plain text inside JSON string)
+    `proposal rules:`,
+    `- If score < 60, set proposal to "" (empty string).`,
+    `- If score >= 60, write a concise proposal (<= 900 chars), plain text, no markdown.`,
+    `- Use \n for new lines in the proposal string.`,
+    `- Structure the proposal exactly as:`,
     `Hi,`,
     `One sentence linking my skills to the job.`,
     `RELEVANT EXPERIENCE:`,
@@ -823,7 +868,7 @@ async function assessAndMaybeGenerate(job, companyId, profileId) {
     `- Timeline and suggestion to talk`,
     `Best regards,`,
     `${profileName}`,
-    `--- PROPOSAL_FORMAT END ---`,
+    // Job payload to evaluate
     `JOB_TITLE: ${title}`,
     `JOB_SUMMARY_JSON_START`,
     jobJson,
@@ -875,10 +920,10 @@ console.log("threadId", threadId);
   try {
     console.log(JSON.stringify({ event: 'assistant.response', profileId, jobId: jobIdForThrottle || null, preview: String(text).slice(0, 300) }));
   } catch {}
-  const parsed = extractJson(text) || {};
-  const score = Number(parsed.score || parsed.compatibility || 0);
+  const parsed = parseAssistantOutput(text);
+  const score = parsed.score;
   const suitable = (parsed.suitable === true) && (score >= 60);
-  const proposal = String(parsed.proposal || '').trim();
+  const proposal = parsed.proposal;
   return { suitable, score: Math.floor(score), proposal, threadId };
 }
 
