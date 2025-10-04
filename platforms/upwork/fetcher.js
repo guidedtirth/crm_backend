@@ -568,43 +568,81 @@ function jobMatchesFilter(job, f) {
     const J = job?.job || job; // nested job fallback
     const categoryId = job?.occupations?.category?.id || J?.occupations?.category?.id || job?.category || J?.category || null;
     if (Array.isArray(f.category_ids) && f.category_ids.length) {
-      const ok = f.category_ids.map(String).includes(String(categoryId || ''));
-      if (!ok) return false;
+      if (categoryId != null && String(categoryId).trim() !== '') {
+        const ok = f.category_ids.map(String).includes(String(categoryId));
+        if (!ok) return false;
+      }
+      // if categoryId is null/empty -> pass (do not reject)
     }
     // Workload
     if (Array.isArray(f.workload) && f.workload.length) {
-      const isFull = String(job?.engagement || J?.engagement || '').toLowerCase().includes('30+');
-      const targetFull = f.workload.includes('full_time');
-      const targetPart = f.workload.some(w => w === 'part_time' || w === 'as_needed');
-      if (isFull && !targetFull) return false;
-      if (!isFull && targetFull && !targetPart) return false;
+      const engagementStr = String(job?.engagement || J?.engagement || '').toLowerCase();
+      if (engagementStr) {
+        const isFull = engagementStr.includes('30+');
+        const targetFull = f.workload.includes('full_time');
+        const targetPart = f.workload.some(w => w === 'part_time' || w === 'as_needed');
+        if (isFull && !targetFull) return false;
+        if (!isFull && targetFull && !targetPart) return false;
+      }
+      // if engagement missing -> pass
     }
     // Verified payment
     if (typeof f.verified_payment_only === 'boolean' && f.verified_payment_only) {
-      const verified = ((job?.client?.verificationStatus || J?.client?.verificationStatus || '')).toUpperCase() === 'VERIFIED';
-      if (!verified) return false;
+      const verStr = (job?.client?.verificationStatus || J?.client?.verificationStatus || '');
+      if (verStr) {
+        const verified = verStr.toUpperCase() === 'VERIFIED';
+        if (!verified) return false;
+      }
+      // if missing -> pass
     }
     // Client hires
     const hires = getNum(job?.client?.totalHires ?? J?.client?.totalHires);
-    if (f.client_hires_min != null && (hires == null || hires < Number(f.client_hires_min))) return false;
-    if (f.client_hires_max != null && (hires == null || hires > Number(f.client_hires_max))) return false;
+    if (f.client_hires_min != null) {
+      if (hires != null && hires < Number(f.client_hires_min)) return false;
+    }
+    if (f.client_hires_max != null) {
+      if (hires != null && hires > Number(f.client_hires_max)) return false;
+    }
     // Hourly
     const hMin = getNum(job?.hourlyBudgetMin?.rawValue ?? J?.hourlyBudgetMin?.rawValue);
     const hMax = getNum(job?.hourlyBudgetMax?.rawValue ?? J?.hourlyBudgetMax?.rawValue);
-    if (f.hourly_rate_min != null && (hMin == null || Number(f.hourly_rate_min) > (hMax ?? hMin))) return false;
-    if (f.hourly_rate_max != null && (hMax == null || Number(f.hourly_rate_max) < (hMin ?? hMax))) return false;
+    if (f.hourly_rate_min != null) {
+      if (hMin != null || hMax != null) {
+        const lowerOk = Number(f.hourly_rate_min) <= (hMax ?? hMin ?? Number.POSITIVE_INFINITY);
+        if (!lowerOk) return false;
+      }
+      // if hourly is missing -> pass
+    }
+    if (f.hourly_rate_max != null) {
+      if (hMin != null || hMax != null) {
+        const upperOk = Number(f.hourly_rate_max) >= (hMin ?? hMax ?? Number.NEGATIVE_INFINITY);
+        if (!upperOk) return false;
+      }
+      // if hourly is missing -> pass
+    }
     // Budget (fixed)
     const amount = getNum(job?.amount?.rawValue ?? J?.amount?.rawValue);
-    if (f.budget_min != null && (amount == null || amount < Number(f.budget_min))) return false;
-    if (f.budget_max != null && (amount == null || amount > Number(f.budget_max))) return false;
+    if (f.budget_min != null) {
+      if (amount != null && amount < Number(f.budget_min)) return false;
+    }
+    if (f.budget_max != null) {
+      if (amount != null && amount > Number(f.budget_max)) return false;
+    }
     // Proposals / applicants
     const applicants = getNum(job?.totalApplicants ?? J?.totalApplicants);
-    if (f.proposal_min != null && (applicants == null || applicants < Number(f.proposal_min))) return false;
-    if (f.proposal_max != null && (applicants == null || applicants > Number(f.proposal_max))) return false;
+    if (f.proposal_min != null) {
+      if (applicants != null && applicants < Number(f.proposal_min)) return false;
+    }
+    if (f.proposal_max != null) {
+      if (applicants != null && applicants > Number(f.proposal_max)) return false;
+    }
     // Experience
     if (f.experience_level && String(f.experience_level).length) {
-      const exp = (job?.experienceLevel || J?.experienceLevel || '').toUpperCase();
-      if (exp !== String(f.experience_level).toUpperCase()) return false;
+      const exp = (job?.experienceLevel || J?.experienceLevel || '');
+      if (exp) {
+        if (exp.toUpperCase() !== String(f.experience_level).toUpperCase()) return false;
+      }
+      // if missing -> pass
     }
     return true;
   } catch {
@@ -769,9 +807,9 @@ async function assessAndMaybeGenerate(job, companyId, profileId) {
 
   const prompt = [
     `Using the assistant thread as the user's background, check how well the user fits the job below. Be simple and positive: focus on what the user knows from the thread, even if minimal, and see if it can work for the job with some learning.`,
-    `Scoring: 0-39 no fit, 40-79 some fit, 80-100 possible & good fit.`,
-    `Suitability: true if score >= 80 or user can likely handle the job.`,
-    `Proposal: Write a short, positive plain-text proposal if suitable=true and score >= 80; otherwise proposal='' (empty). Use this format:`,
+    `Scoring: 0-59 no fit, 60-100 some, possible & good fit.`,
+    `Suitability: true if score >= 60 or user can likely handle the job.`,
+    `Proposal: If score < 60, set proposal='' (empty). If score >= 60, write a short, positive plain-text proposal using this format:`,
     `--- PROPOSAL_FORMAT START ---`,
     `Hi,`,
     `One sentence linking my skills to the job.`,
@@ -839,7 +877,7 @@ console.log("threadId", threadId);
   } catch {}
   const parsed = extractJson(text) || {};
   const score = Number(parsed.score || parsed.compatibility || 0);
-  const suitable = (parsed.suitable === true) && (score >= 80);
+  const suitable = (parsed.suitable === true) && (score >= 60);
   const proposal = String(parsed.proposal || '').trim();
   return { suitable, score: Math.floor(score), proposal, threadId };
 }
@@ -985,11 +1023,18 @@ async function processJobsForAllCompanies(jobs) {
         try {
           try { console.log(JSON.stringify({ event: 'assistant.queue', companyId, profileId: profile.id, jobId: job.job_id })); } catch {}
           const { suitable, score, proposal, threadId } = await assessAndMaybeGenerate(node, companyId, profile.id);
-          if (!suitable || score < 80 || !proposal) continue;
+          if (!suitable || score < 60 || !proposal) continue;
           const feedbackId = uuidv4();
+          // Create a fresh thread for the saved proposal; fallback to evaluation thread if creation fails
+          let saveThreadId = null;
+          try {
+            const t = await openai.beta.threads.create();
+            saveThreadId = t.id;
+            await openai.beta.threads.messages.create(saveThreadId, { role: 'assistant', content: proposal });
+          } catch (_) { saveThreadId = threadId; }
           await db.query(
             'INSERT INTO proposal_feedback (id, profile_id, job_id, query_text, feedback, proposal, thread_id, score, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW())',
-            [feedbackId, profile.id, job.job_id, JSON.stringify({ id: job.job_id }), null, proposal, threadId, score]
+            [feedbackId, profile.id, job.job_id, JSON.stringify({ id: job.job_id }), null, proposal, saveThreadId, score]
           );
           pipelineLog('score.fullscan', { companyId, profileId: profile.id, jobId: job.job_id, score, suitable: true, saved: true });
         } catch (e) {

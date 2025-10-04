@@ -7,6 +7,9 @@ const axios = require('axios');
 const OpenAI = require('openai');
 const db = require('../db');
 const { getAssistantId, initializeAssistant } = require('../assistant');
+const fs = require('fs').promises;
+const fss = require('fs');
+const path = require('path');
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 let tablesReady = false;
@@ -142,12 +145,15 @@ module.exports = {
       await ensureTables();
       const assistantId = await ensureAssistant();
       const { threadId } = req.params;
-      const { profileId, content } = req.body || {};
+      const { profileId, content, images, thumbs } = req.body || {};
       const companyId = req.user?.company_id;
       if (!companyId) return res.status(401).json({ error: 'Missing company scope' });
       const prof = await db.query('SELECT 1 FROM profiles WHERE id = $1 AND company_id = $2', [profileId, companyId]);
       if (prof.rows.length === 0) return res.status(404).json({ error: 'Profile not found' });
-      if (!threadId || !profileId || !content) return res.status(400).json({ error: 'threadId, profileId and content are required' });
+      if (!threadId || !profileId) return res.status(400).json({ error: 'threadId and profileId are required' });
+      const hasText = !!(content && String(content).trim().length);
+      const hasImages = Array.isArray(images) && images.length > 0;
+      if (!hasText && !hasImages) return res.status(400).json({ error: 'Either content or images are required' });
 
       // Ensure thread exists record for profile
       const thr = await db.query('SELECT 1 FROM profile_chat_threads WHERE profile_id = $1 AND thread_id = $2 LIMIT 1', [profileId, threadId]);
@@ -156,8 +162,47 @@ module.exports = {
         await db.query('INSERT INTO profile_chat_threads (id, profile_id, thread_id) VALUES ($1, $2, $3)', [id, profileId, threadId]);
       }
 
-      // Append user message to assistant thread
-      await openai.beta.threads.messages.create(threadId, { role: 'user', content });
+      // Append user message to assistant thread (support optional images)
+      if (Array.isArray(images) && images.length > 0) {
+        const parts = [];
+        if (content && String(content).trim().length) {
+          parts.push({ type: 'text', text: String(content) });
+        }
+        const tmpFiles = [];
+        try {
+          for (const raw of images) {
+            if (typeof raw !== 'string' || !raw.trim()) continue;
+            const val = raw.trim();
+            if (val.startsWith('http://') || val.startsWith('https://')) {
+              parts.push({ type: 'image_url', image_url: { url: val } });
+              continue;
+            }
+            // data URL -> upload as vision file and reference by file_id
+            if (val.startsWith('data:')) {
+              const m = val.match(/^data:(.+?);base64,(.*)$/);
+              if (!m) continue;
+              const mime = m[1] || 'application/octet-stream';
+              const base64 = m[2] || '';
+              const buf = Buffer.from(base64, 'base64');
+              const ext = mime.includes('png') ? '.png' : mime.includes('jpeg') ? '.jpg' : mime.includes('webp') ? '.webp' : mime.includes('gif') ? '.gif' : '.bin';
+              const tmpDir = path.join(__dirname, '../Uploads');
+              try { await fs.mkdir(tmpDir, { recursive: true }); } catch {}
+              const tmpPath = path.join(tmpDir, `img_${uuidv4()}${ext}`);
+              await fs.writeFile(tmpPath, buf);
+              tmpFiles.push(tmpPath);
+              const file = await openai.files.create({ file: fss.createReadStream(tmpPath), purpose: 'vision' });
+              parts.push({ type: 'image_file', image_file: { file_id: file.id } });
+              continue;
+            }
+          }
+          await openai.beta.threads.messages.create(threadId, { role: 'user', content: parts });
+        } finally {
+          // best-effort cleanup
+          for (const p of tmpFiles) { try { await fs.unlink(p); } catch {} }
+        }
+      } else {
+        await openai.beta.threads.messages.create(threadId, { role: 'user', content });
+      }
       const run = await openai.beta.threads.runs.create(threadId, { assistant_id: assistantId });
       await pollRun(threadId, run.id);
 
@@ -168,13 +213,27 @@ module.exports = {
 
       const userMsgId = uuidv4();
       const asstMsgId = uuidv4();
-      // Do not persist plaintext: store NULL; client saves encrypted copy via /encrypted
-      await db.query('INSERT INTO profile_chat_messages (id, profile_id, thread_id, role, content) VALUES ($1, $2, $3, $4, NULL)', [userMsgId, profileId, threadId, 'user']);
+      // Store a compact JSON hint so filters/scoring can know it was an image/text message; client still saves encrypted payload
+      // Prefer storing tiny thumbnails in plaintext so UI can rehydrate even if encrypted save fails
+      let compact = null;
+      if (hasImages) {
+        const tiny = Array.isArray(thumbs) ? thumbs.filter((u) => typeof u === 'string' && u.startsWith('data:image')).slice(0, 6) : [];
+        try {
+          const asJson = JSON.stringify({ text: content || '', images: tiny });
+          // Keep under ~60KB to avoid large rows (rough heuristic)
+          if (asJson.length <= 60 * 1024) compact = asJson; else compact = JSON.stringify({ t: !!content, i: true });
+        } catch { compact = JSON.stringify({ t: !!content, i: true }); }
+      }
+      await db.query('INSERT INTO profile_chat_messages (id, profile_id, thread_id, role, content) VALUES ($1, $2, $3, $4, $5)', [userMsgId, profileId, threadId, 'user', compact]);
       await db.query('INSERT INTO profile_chat_messages (id, profile_id, thread_id, role, content) VALUES ($1, $2, $3, $4, NULL)', [asstMsgId, profileId, threadId, 'assistant']);
       await db.query('UPDATE profile_chat_threads SET updated_at = NOW() WHERE thread_id = $1', [threadId]);
 
+      // If images were sent, return the user message content with thumbnails if provided
+      const userContentOut = (Array.isArray(images) && images.length > 0)
+        ? JSON.stringify({ text: content || '', images: (Array.isArray(thumbs) && thumbs.length > 0 ? thumbs : images).filter((u) => typeof u === 'string' && u.trim()) })
+        : content;
       return res.json({ thread_id: threadId, messages: [
-        { id: userMsgId, role: 'user', content, created_at: new Date().toISOString() },
+        { id: userMsgId, role: 'user', content: userContentOut, created_at: new Date().toISOString() },
         { id: asstMsgId, role: 'assistant', content: assistantText, created_at: new Date().toISOString() }
       ]});
     } catch (err) {

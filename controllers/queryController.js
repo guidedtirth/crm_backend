@@ -191,15 +191,22 @@ module.exports = {
         }
 
         const feedbackId = uuidv4();
+        // Create a fresh thread for the saved proposal; fallback to refinement thread if creation fails
+        let saveThreadId = null;
+        try {
+          const t = await openai.beta.threads.create();
+          saveThreadId = t.id;
+          await openai.beta.threads.messages.create(saveThreadId, { role: 'assistant', content: proposal });
+        } catch (_) { saveThreadId = ensuredThreadId; }
         if (jobIdFromBody) {
           await pool.query(
             'INSERT INTO proposal_feedback (id, profile_id, job_id, query_text, feedback, proposal, thread_id, score, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())',
-            [feedbackId, profileIdFromBody, jobIdFromBody, JSON.stringify({ id: jobIdFromBody, title }), feedback, proposal, ensuredThreadId, scoreToPersist]
+            [feedbackId, profileIdFromBody, jobIdFromBody, JSON.stringify({ id: jobIdFromBody, title }), feedback, proposal, saveThreadId, scoreToPersist]
           );
         } else {
           await pool.query(
             'INSERT INTO proposal_feedback (id, profile_id, job_id, query_text, feedback, proposal, thread_id, score, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())',
-            [feedbackId, profileIdFromBody, null, JSON.stringify({ id: null, title }), feedback, proposal, ensuredThreadId, scoreToPersist]
+            [feedbackId, profileIdFromBody, null, JSON.stringify({ id: null, title }), feedback, proposal, saveThreadId, scoreToPersist]
           );
         }
 
@@ -274,15 +281,22 @@ module.exports = {
       });
 
       const feedbackId = uuidv4();
+      // Create a fresh thread for the saved proposal; fallback to evaluation thread if creation fails
+      let saveThreadId = null;
+      try {
+        const t = await openai.beta.threads.create();
+        saveThreadId = t.id;
+        await openai.beta.threads.messages.create(saveThreadId, { role: 'assistant', content: proposal });
+      } catch (_) { saveThreadId = newThreadId; }
       if (jobIdFromBody) {
         await pool.query(
           'INSERT INTO proposal_feedback (id, profile_id, job_id, query_text, feedback, proposal, thread_id, score, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())',
-          [feedbackId, bestProfileId, jobIdFromBody, JSON.stringify({ id: jobIdFromBody, title }), null, proposal, newThreadId, Math.floor(highestScore * 100)]
+          [feedbackId, bestProfileId, jobIdFromBody, JSON.stringify({ id: jobIdFromBody, title }), null, proposal, saveThreadId, Math.floor(highestScore * 100)]
         );
       } else {
         await pool.query(
           'INSERT INTO proposal_feedback (id, profile_id, job_id, query_text, feedback, proposal, thread_id, score, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())',
-          [feedbackId, bestProfileId, null, JSON.stringify({ id: null, title }), null, proposal, newThreadId, Math.floor(highestScore * 100)]
+          [feedbackId, bestProfileId, null, JSON.stringify({ id: null, title }), null, proposal, saveThreadId, Math.floor(highestScore * 100)]
         );
       }
 

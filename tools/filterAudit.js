@@ -53,43 +53,75 @@ function jobMatchesFilter(job, f) {
     const J = job?.job || job;
     const categoryId = job?.occupations?.category?.id || J?.occupations?.category?.id || job?.category || J?.category || null;
     if (Array.isArray(f.category_ids) && f.category_ids.length) {
-      const ok = f.category_ids.map(String).includes(String(categoryId || ''));
-      if (!ok) return false;
+      if (categoryId != null && String(categoryId).trim() !== '') {
+        const ok = f.category_ids.map(String).includes(String(categoryId));
+        if (!ok) return false;
+      }
     }
     // Workload
     if (Array.isArray(f.workload) && f.workload.length) {
-      const isFull = String(job?.engagement || J?.engagement || '').toLowerCase().includes('30+');
-      const targetFull = f.workload.includes('full_time');
-      const targetPart = f.workload.some(w => w === 'part_time' || w === 'as_needed');
-      if (isFull && !targetFull) return false;
-      if (!isFull && targetFull && !targetPart) return false;
+      const engagementStr = String(job?.engagement || J?.engagement || '').toLowerCase();
+      if (engagementStr) {
+        const isFull = engagementStr.includes('30+');
+        const targetFull = f.workload.includes('full_time');
+        const targetPart = f.workload.some(w => w === 'part_time' || w === 'as_needed');
+        if (isFull && !targetFull) return false;
+        if (!isFull && targetFull && !targetPart) return false;
+      }
     }
     // Verified payment
     if (typeof f.verified_payment_only === 'boolean' && f.verified_payment_only) {
-      const verified = ((job?.client?.verificationStatus || J?.client?.verificationStatus || '')).toUpperCase() === 'VERIFIED';
-      if (!verified) return false;
+      const verStr = (job?.client?.verificationStatus || J?.client?.verificationStatus || '');
+      if (verStr) {
+        const verified = verStr.toUpperCase() === 'VERIFIED';
+        if (!verified) return false;
+      }
     }
     // Client hires
     const hires = getNum(job?.client?.totalHires ?? J?.client?.totalHires);
-    if (f.client_hires_min != null && (hires == null || hires < Number(f.client_hires_min))) return false;
-    if (f.client_hires_max != null && (hires == null || hires > Number(f.client_hires_max))) return false;
+    if (f.client_hires_min != null) {
+      if (hires != null && hires < Number(f.client_hires_min)) return false;
+    }
+    if (f.client_hires_max != null) {
+      if (hires != null && hires > Number(f.client_hires_max)) return false;
+    }
     // Hourly
     const hMin = getNum(job?.hourlyBudgetMin?.rawValue ?? J?.hourlyBudgetMin?.rawValue);
     const hMax = getNum(job?.hourlyBudgetMax?.rawValue ?? J?.hourlyBudgetMax?.rawValue);
-    if (f.hourly_rate_min != null && (hMin == null || Number(f.hourly_rate_min) > (hMax ?? hMin))) return false;
-    if (f.hourly_rate_max != null && (hMax == null || Number(f.hourly_rate_max) < (hMin ?? hMax))) return false;
+    if (f.hourly_rate_min != null) {
+      if (hMin != null || hMax != null) {
+        const lowerOk = Number(f.hourly_rate_min) <= (hMax ?? hMin ?? Number.POSITIVE_INFINITY);
+        if (!lowerOk) return false;
+      }
+    }
+    if (f.hourly_rate_max != null) {
+      if (hMin != null || hMax != null) {
+        const upperOk = Number(f.hourly_rate_max) >= (hMin ?? hMax ?? Number.NEGATIVE_INFINITY);
+        if (!upperOk) return false;
+      }
+    }
     // Budget (fixed)
     const amount = getNum(job?.amount?.rawValue ?? J?.amount?.rawValue);
-    if (f.budget_min != null && (amount == null || amount < Number(f.budget_min))) return false;
-    if (f.budget_max != null && (amount == null || amount > Number(f.budget_max))) return false;
+    if (f.budget_min != null) {
+      if (amount != null && amount < Number(f.budget_min)) return false;
+    }
+    if (f.budget_max != null) {
+      if (amount != null && amount > Number(f.budget_max)) return false;
+    }
     // Proposals / applicants
     const applicants = getNum(job?.totalApplicants ?? J?.totalApplicants);
-    if (f.proposal_min != null && (applicants == null || applicants < Number(f.proposal_min))) return false;
-    if (f.proposal_max != null && (applicants == null || applicants > Number(f.proposal_max))) return false;
+    if (f.proposal_min != null) {
+      if (applicants != null && applicants < Number(f.proposal_min)) return false;
+    }
+    if (f.proposal_max != null) {
+      if (applicants != null && applicants > Number(f.proposal_max)) return false;
+    }
     // Experience
     if (f.experience_level && String(f.experience_level).length) {
-      const exp = (job?.experienceLevel || J?.experienceLevel || '').toUpperCase();
-      if (exp !== String(f.experience_level).toUpperCase()) return false;
+      const exp = (job?.experienceLevel || J?.experienceLevel || '');
+      if (exp) {
+        if (exp.toUpperCase() !== String(f.experience_level).toUpperCase()) return false;
+      }
     }
     return true;
   } catch {
